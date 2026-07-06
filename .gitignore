@@ -10,3 +10,6 @@ __pycache__/
 
 # Run logs
 logs/
+
+# Runtime cursor / high-water-mark
+data/state.json
