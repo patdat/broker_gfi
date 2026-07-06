@@ -42,24 +42,30 @@ def csvCompiler(counter, force=False):
         set_cursor('GFI_csvs', latest)  # advance pointer over everything we accounted for
 
     newFiles = sorted(newFiles)
-    if not newFiles:
-        print('CSV: no new reports - skipping parse and upload')
-        return None
-    print(f'CSV: {len(newFiles)} new file(s): {newFiles}')
-
-    df = pd.DataFrame()
-    for file in newFiles:
-        df = pd.concat([df, read_csv_file(file)])
-
     masterFile = pd.read_csv('./data/GFI_csvs.csv', parse_dates=['date','period'])
-    rowsBefore = len(masterFile)
-    df = pd.concat([masterFile, df])
-    df = df.drop_duplicates(subset=['periodType', 'date', 'instrument', 'period'], keep='last')
-    if len(df) <= rowsBefore:
-        print('CSV: new files added no new rows - skipping upload')
+
+    if newFiles:
+        print(f'CSV: {len(newFiles)} new file(s): {newFiles}')
+        df = pd.DataFrame()
+        for file in newFiles:
+            df = pd.concat([df, read_csv_file(file)])
+        rowsBefore = len(masterFile)
+        df = pd.concat([masterFile, df])
+        df = df.drop_duplicates(subset=['periodType', 'date', 'instrument', 'period'], keep='last')
+        newRows = len(df) > rowsBefore
+    else:
+        print('CSV: no new reports')
+        df = masterFile
+        newRows = False
+
+    if not newRows and not force:
+        print('CSV: nothing new - skipping upload')
         return None
 
-    df.to_csv('./data/GFI_csvs.csv', index=False)
+    if newRows:
+        df.to_csv('./data/GFI_csvs.csv', index=False)
+    else:
+        print('CSV: [FORCED] no new rows - re-publishing existing master')
     processBroker(df, './data/', 'GFI_csvs', './data/master/', 'BROKER/MASTER')
     return df
 
@@ -71,24 +77,30 @@ def xlsxDownloader(counter, force=False):
         set_cursor('GFI_xlsx', latest)  # advance pointer over everything we accounted for
 
     newFiles = sorted(newFiles)
-    if not newFiles:
-        print('XLSX: no new reports - skipping parse and upload')
-        return None
-    print(f'XLSX: {len(newFiles)} new file(s): {newFiles}')
-
-    df = pd.DataFrame()
-    for file in newFiles:
-        df = pd.concat([df, read_xlsx_file(file)])
-
     masterFile = pd.read_csv('./data/GFI_xlsx.csv', parse_dates=['date','period'])
-    rowsBefore = len(masterFile)
-    df = pd.concat([masterFile, df])
-    df = df.drop_duplicates(subset=['periodType', 'date', 'instrument', 'period'], keep='last')
-    if len(df) <= rowsBefore:
-        print('XLSX: new files added no new rows - skipping upload')
+
+    if newFiles:
+        print(f'XLSX: {len(newFiles)} new file(s): {newFiles}')
+        df = pd.DataFrame()
+        for file in newFiles:
+            df = pd.concat([df, read_xlsx_file(file)])
+        rowsBefore = len(masterFile)
+        df = pd.concat([masterFile, df])
+        df = df.drop_duplicates(subset=['periodType', 'date', 'instrument', 'period'], keep='last')
+        newRows = len(df) > rowsBefore
+    else:
+        print('XLSX: no new reports')
+        df = masterFile
+        newRows = False
+
+    if not newRows and not force:
+        print('XLSX: nothing new - skipping upload')
         return None
 
-    df.to_csv('./data/GFI_xlsx.csv', index=False)
+    if newRows:
+        df.to_csv('./data/GFI_xlsx.csv', index=False)
+    else:
+        print('XLSX: [FORCED] no new rows - re-publishing existing master')
     processBroker(df, './data/', 'GFI_xlsx', './data/master/', 'BROKER/MASTER')
     copyToKDrive(['./data/GFI_xlsx.csv', './data/shortened/GFI_xlsx_last.csv'])
     return df
