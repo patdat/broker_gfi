@@ -17,8 +17,9 @@ python main.py          # runs main(5): processes the 5 most recent files per pi
 - Each util file has an `if __name__ == '__main__'` block for exercising one stage in isolation, e.g. `python utils/read_csv_file.py` (edit the hardcoded sample filename inside first).
 - `notebook.ipynb` mirrors `main.py` and is the interactive/debug entry point.
 
-### Dependencies (no requirements file exists)
-`pandas`, `numpy`, `pywin32` (`win32com`), `openpyxl` (for `pd.read_excel`).
+### Dependencies
+Pinned in `requirements.txt` (Python 3.13). Setup: `python -m venv .venv && .venv\Scripts\python.exe -m pip install -r requirements.txt`.
+Runtime deps: `pandas`, `numpy`, `openpyxl`, `pywin32`, `boto3`, `python-dotenv`.
 
 ## Architecture
 
@@ -28,6 +29,8 @@ Two parallel, near-identical pipelines run per invocation — **CSV** (GFI forma
 2. **Parse** (`utils/read_csv_file.py`, `utils/read_xlsx_file.py`): reshape each raw file into long format (`melt`), keep only routes containing `TD` (dirty tanker routes), and resolve period codes via the lookup (below).
 3. **Compile** (`csvCompiler` / `xlsxDownloader` in `main.py`): concatenate the newly parsed frames onto the existing master (`./data/GFI_csvs.csv` or `./data/GFI_xlsx.csv`), **dedupe on `['periodType','date','instrument','period']` keeping the last row**, and rewrite the master.
 4. **Shorten** (`utils/shorten_csv.py::processBroker`): write 30- and 60-day trailing windows to `./data/shortened/<name>_{30,60}.csv`.
+5. **Local export** (`main.py::copyToKDrive`): after a successful xlsx run, copy `GFI_xlsx.csv` and `data/shortened/GFI_xlsx_last.csv` to `K:\price_gfi`. Skipped silently if the folder doesn't exist (machine-specific sink).
+6. **Logging** (`utils/logger.py::setup_logging`): every `python main.py` invocation tees stdout+stderr to `./logs/run_<YYYY-MM-DD_HHMMSS>.log`; folder is auto-created.
 
 ### Period normalization (`lookup/periods.csv`)
 Maps broker period codes → `plmName` (concrete date) and `periodicity` (`BITR`, `MTD`, `monthly`, `quarterly`, `yearly`). Codes with no mapping — and `BITR`/`MTD` — fall back to the **beginning of the report month**. This lookup is the single source of truth for turning quote labels into dated periods; both parse stages merge against it.
@@ -42,5 +45,5 @@ Maps broker period codes → `plmName` (concrete date) and `periodicity` (`BITR`
 ## Gotchas
 
 - **Attachment filenames come from `message.Subject[-10:]`** (the last 10 chars, expected to be the `YYYY-MM-DD` date). Correction emails are meant to be skipped via a `\b(correction|CORRECTION)\b` regex, but subjects like `(correction)` can slip through and produce garbage files such as `orrection).csv` in `./data/csv|xlsx`. Watch for stray non-date filenames when parsing.
-- **`processBroker`'s `masterFolder` / `cloudFolder='BROKER/MASTER'` arguments are vestigial** — the current `shorten_csv.py` writes only local files. An earlier version uploaded the masters and windows to Aliyun OSS (`pcia-crude.oss-us-east-1.aliyuncs.com/BROKER/MASTER/`, visible in `notebook.ipynb` output); that upload code is no longer in the repo. Do not assume outputs are published anywhere.
+- **`processBroker`'s `masterFolder='./data/master/'` / `cloudFolder='BROKER/MASTER'` arguments are vestigial** — `./data/master/` doesn't exist and isn't written to; the current `shorten_csv.py` writes only under `./data/shortened/` locally and pushes to S3 via `utils/cloud.py`. An earlier version uploaded masters to Aliyun OSS (`pcia-crude.oss-us-east-1.aliyuncs.com/BROKER/MASTER/`, visible in `notebook.ipynb` output); that path is gone.
 - Data CSVs under `./data/` are committed to the repo and are the pipeline's persistent state; the scripts read and overwrite them in place.

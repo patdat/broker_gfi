@@ -1,5 +1,6 @@
 import pandas as pd
 import os
+import shutil
 
 from utils.downloader_csv import main as downloader_csv
 from utils.read_csv_file import main as read_csv_file
@@ -8,6 +9,20 @@ from utils.downloader_xlsx import main as downloader_xlsx
 from utils.read_xlsx_file import main as read_xlsx_file
 from utils.shorten_csv import processBroker
 from utils.state import get_cursor, set_cursor
+
+K_DRIVE_DEST = r'K:\price_gfi'
+
+
+def copyToKDrive(paths):
+    if not os.path.isdir(K_DRIVE_DEST):
+        print(f'{K_DRIVE_DEST} not available on this machine - skipping K: copy')
+        return
+    for src in paths:
+        try:
+            shutil.copy2(src, os.path.join(K_DRIVE_DEST, os.path.basename(src)))
+            print(f'Copied {src} -> {K_DRIVE_DEST}')
+        except Exception as e:
+            print(f'K:\\ copy skipped for {src}: {type(e).__name__}: {e}')
 
 
 def checkRunCondition():
@@ -75,6 +90,7 @@ def xlsxDownloader(counter):
 
     df.to_csv('./data/GFI_xlsx.csv', index=False)
     processBroker(df, './data/', 'GFI_xlsx', './data/master/', 'BROKER/MASTER')
+    copyToKDrive(['./data/GFI_xlsx.csv', './data/shortened/GFI_xlsx_last.csv'])
     return df
 
 
