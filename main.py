@@ -61,9 +61,23 @@ def xlsxDownloader(counter):
     return df
     
 def main(counter):
+    print(f'Run condition (today > latest date in master): {runFunctionCheck}')
     if runFunctionCheck == True:
         csvCompiler(counter)
-        xlsxDownloader(counter)    
+        xlsxDownloader(counter)
+    else:
+        print('Master already up to date for today - nothing to do.')
 
 if __name__ == '__main__':
-    main(5)
+    import datetime
+    from utils.logger import setup_logging
+    logpath = setup_logging()
+    print(f'=== broker_gfi run started {datetime.datetime.now():%Y-%m-%d %H:%M:%S} | log: {logpath} ===')
+    try:
+        main(5)
+        print('=== run completed successfully ===')
+    except Exception:
+        import traceback
+        print('=== run FAILED ===')
+        traceback.print_exc()
+        raise

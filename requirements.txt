@@ -1,0 +1,9 @@
+# broker_gfi runtime dependencies
+# Pinned to the versions currently in use (Python 3.13).
+
+pandas==2.3.2
+numpy==2.3.3
+openpyxl==3.1.5      # required by pandas.read_excel for the .xlsx pipeline
+pywin32==311         # Windows-only; provides win32com.client for local Outlook/MAPI access
+boto3==1.43.40       # AWS S3 uploads (utils/cloud.py)
+python-dotenv==1.2.2 # loads AWS credentials from .env

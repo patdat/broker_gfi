@@ -1,0 +1,12 @@
+# Secrets / credentials
+.env
+
+# Virtual environment
+.venv/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Run logs
+logs/

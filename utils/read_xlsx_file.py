@@ -29,7 +29,7 @@ def readFile(file):
     df['uom'] = df['uom'].str.upper()
 
     df['route'] = df['route'].str.upper()
-    df = df[df['route'].str.contains('TD')]
+    df = df[df['route'].str.contains('TD', na=False)]  # na=False drops blank/trailing rows
 
     df['value'] = np.where((df['route'] == 'TD22') & (df['period'] == 'BITR'),df['value']/1000000,df['value'])
     df['uom'] = np.where((df['route'] == 'TD22'),'LSM',df['uom'])
