@@ -7,6 +7,7 @@ from utils.read_csv_file import main as read_csv_file
 from utils.downloader_xlsx import main as downloader_xlsx
 from utils.read_xlsx_file import main as read_xlsx_file
 from utils.shorten_csv import processBroker
+from utils.state import get_cursor, set_cursor
 
 
 def checkRunCondition():
@@ -18,48 +19,65 @@ def checkRunCondition():
     return runFunctionCheck
 runFunctionCheck = checkRunCondition()
 
-def csvCompiler(counter):
-    downloader_csv(counter)
 
-    files = os.listdir('./data/csv')
-    files.sort()
-    files = files[-counter:]
-    
+def csvCompiler(counter):
+    since = get_cursor('GFI_csvs')
+    newFiles, latest = downloader_csv(counter, since)
+    if latest is not None:
+        set_cursor('GFI_csvs', latest)  # advance pointer over everything we accounted for
+
+    newFiles = sorted(newFiles)
+    if not newFiles:
+        print('CSV: no new reports - skipping parse and upload')
+        return None
+    print(f'CSV: {len(newFiles)} new file(s): {newFiles}')
 
     df = pd.DataFrame()
-    for file in files:
-        data = read_csv_file(file)
-        df = pd.concat([df, data])
-        
-    masterFile = pd.read_csv('./data/GFI_csvs.csv',parse_dates=['date','period'])
-    df = pd.concat([masterFile,df])
-    df = df.drop_duplicates(subset=['periodType', 'date', 'instrument', 'period'], keep='last') 
+    for file in newFiles:
+        df = pd.concat([df, read_csv_file(file)])
+
+    masterFile = pd.read_csv('./data/GFI_csvs.csv', parse_dates=['date','period'])
+    rowsBefore = len(masterFile)
+    df = pd.concat([masterFile, df])
+    df = df.drop_duplicates(subset=['periodType', 'date', 'instrument', 'period'], keep='last')
+    if len(df) <= rowsBefore:
+        print('CSV: new files added no new rows - skipping upload')
+        return None
+
     df.to_csv('./data/GFI_csvs.csv', index=False)
-    processBroker(df,'./data/', 'GFI_csvs', './data/master/', 'BROKER/MASTER')
+    processBroker(df, './data/', 'GFI_csvs', './data/master/', 'BROKER/MASTER')
+    return df
 
-
-    return df    
 
 def xlsxDownloader(counter):
-    downloader_xlsx(counter)
+    since = get_cursor('GFI_xlsx')
+    newFiles, latest = downloader_xlsx(counter, since)
+    if latest is not None:
+        set_cursor('GFI_xlsx', latest)  # advance pointer over everything we accounted for
 
-    files = os.listdir('./data/xlsx')
-    files.sort()
-    files = files[-counter:]
+    newFiles = sorted(newFiles)
+    if not newFiles:
+        print('XLSX: no new reports - skipping parse and upload')
+        return None
+    print(f'XLSX: {len(newFiles)} new file(s): {newFiles}')
 
     df = pd.DataFrame()
-    for file in files:
-        data = read_xlsx_file(file)
-        df = pd.concat([df, data])
-        
-    masterFile = pd.read_csv('./data/GFI_xlsx.csv',parse_dates=['date','period'])
-    df = pd.concat([masterFile,df])
-    df = df.drop_duplicates(subset=['periodType', 'date', 'instrument', 'period'], keep='last') 
-    df.to_csv('./data/GFI_xlsx.csv', index=False)
-    processBroker(df,'./data/', 'GFI_xlsx', './data/master/', 'BROKER/MASTER')
+    for file in newFiles:
+        df = pd.concat([df, read_xlsx_file(file)])
 
+    masterFile = pd.read_csv('./data/GFI_xlsx.csv', parse_dates=['date','period'])
+    rowsBefore = len(masterFile)
+    df = pd.concat([masterFile, df])
+    df = df.drop_duplicates(subset=['periodType', 'date', 'instrument', 'period'], keep='last')
+    if len(df) <= rowsBefore:
+        print('XLSX: new files added no new rows - skipping upload')
+        return None
+
+    df.to_csv('./data/GFI_xlsx.csv', index=False)
+    processBroker(df, './data/', 'GFI_xlsx', './data/master/', 'BROKER/MASTER')
     return df
-    
+
+
 def main(counter):
     print(f'Run condition (today > latest date in master): {runFunctionCheck}')
     if runFunctionCheck == True:
@@ -67,6 +85,7 @@ def main(counter):
         xlsxDownloader(counter)
     else:
         print('Master already up to date for today - nothing to do.')
+
 
 if __name__ == '__main__':
     import datetime
