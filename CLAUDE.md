@@ -33,7 +33,7 @@ Two parallel, near-identical pipelines run per invocation — **CSV** (GFI forma
 6. **Logging** (`utils/logger.py::setup_logging`): every `python main.py` invocation tees stdout+stderr to `./logs/run_<YYYY-MM-DD_HHMMSS>.log`; folder is auto-created.
 
 ### Period normalization (`lookup/periods.csv`)
-Maps broker period codes → `plmName` (concrete date) and `periodicity` (`BITR`, `MTD`, `monthly`, `quarterly`, `yearly`). Codes with no mapping — and `BITR`/`MTD` — fall back to the **beginning of the report month**. This lookup is the single source of truth for turning quote labels into dated periods; both parse stages merge against it.
+Maps broker period codes → `plmName` (concrete date) and `periodicity`, which becomes the output `periodType`. Codes: `BITR`, `MTD`, `M` (monthly), `Q` (quarterly), `A` (annual); `H` (half-year) is reserved for future data (none currently). Codes with no mapping — and `BITR`/`MTD` — fall back to the **beginning of the report month**. This lookup is the single source of truth both for dating quote labels **and for the `periodType` codes** (change a code here and it propagates to both pipelines); both parse stages merge against it.
 
 ### Output schemas (they differ between pipelines)
 - CSV master: `source, periodType, date, instrument, period, price`
