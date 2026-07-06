@@ -9,9 +9,12 @@ A Windows-only ETL pipeline that ingests daily tanker freight broker quotes (GFI
 ## Running
 
 ```bash
-python main.py          # main(5): 5-day fallback look-back; only genuinely new reports are processed
+python main.py                 # normal: cursor + once-per-day gate; only genuinely new reports processed
+python main.py --force         # ignore data/state.json (cursor) AND the once-per-day gate; re-scan the window
+python main.py --force --days 30   # same, but widen the look-back to 30 days (gap recovery after an outage)
 ```
 
+- **CLI flags** (`main.py`): `--force` bypasses the `state.json` cursor (`since=None`) and the once-per-day run gate; `--days N` sets the look-back window (default 5). `--force` still respects the on-disk and no-new-rows guards, so it re-scans for anything *missing* — it does not re-download on-disk dates or re-upload unchanged data.
 - **Must run on Windows with Outlook installed and signed in** to the mailbox that receives the broker emails. The downloaders use `win32com.client` over MAPI and read the **`gfi` subfolder of the Inbox** (`GetDefaultFolder(6).Folders["gfi"]`) — broker emails are filed there, not the root Inbox. On any other environment the Outlook call fails (caught and logged) and no files are downloaded.
 - All paths are relative (`./data`, `./lookup`), so **always run from the repo root**.
 - **AWS credentials** for the S3 upload come from a local `.env` (see `.env.example`): `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_BUCKET`. `.env` is git-ignored — never commit it.
