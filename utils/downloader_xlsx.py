@@ -7,7 +7,8 @@ def downloader(dayStart):
     codePath = os.getcwd()
     try:
         outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
-        inbox = outlook.GetDefaultFolder(6)
+        # broker emails are filed into the 'gfi' subfolder of the Inbox, not the root Inbox
+        inbox = outlook.GetDefaultFolder(6).Folders["gfi"]
         codePath = os.getcwd()
         start_date = datetime.datetime.now() - datetime.timedelta(days=dayStart)
         messages = inbox.Items.Restrict(

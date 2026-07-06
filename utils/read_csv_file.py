@@ -41,7 +41,7 @@ def csv_reading(filename):
     df['period'] = df['period'].str.upper()
     df = df[df['period']!='BITR CHANGE']
     df = df[df['period']!='MTD CHANGE']
-    df = df[df['route'].str.contains('TD')]
+    df = df[df['route'].str.contains('TD', na=False)]  # na=False drops blank/trailing rows
     df['reportDate'] = fileDate
     df = replacePeriods(df,lookupPeriod)
     df = finalTouches(df)
