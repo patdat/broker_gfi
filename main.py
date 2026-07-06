@@ -35,8 +35,8 @@ def checkRunCondition():
 runFunctionCheck = checkRunCondition()
 
 
-def csvCompiler(counter):
-    since = get_cursor('GFI_csvs')
+def csvCompiler(counter, force=False):
+    since = None if force else get_cursor('GFI_csvs')
     newFiles, latest = downloader_csv(counter, since)
     if latest is not None:
         set_cursor('GFI_csvs', latest)  # advance pointer over everything we accounted for
@@ -64,8 +64,8 @@ def csvCompiler(counter):
     return df
 
 
-def xlsxDownloader(counter):
-    since = get_cursor('GFI_xlsx')
+def xlsxDownloader(counter, force=False):
+    since = None if force else get_cursor('GFI_xlsx')
     newFiles, latest = downloader_xlsx(counter, since)
     if latest is not None:
         set_cursor('GFI_xlsx', latest)  # advance pointer over everything we accounted for
@@ -94,22 +94,34 @@ def xlsxDownloader(counter):
     return df
 
 
-def main(counter):
-    print(f'Run condition (today > latest date in master): {runFunctionCheck}')
-    if runFunctionCheck == True:
-        csvCompiler(counter)
-        xlsxDownloader(counter)
+def main(counter, force=False):
+    print(f'Run condition (today > latest date in master): {runFunctionCheck}{" [FORCED]" if force else ""}')
+    if force or runFunctionCheck == True:
+        csvCompiler(counter, force)
+        xlsxDownloader(counter, force)
     else:
-        print('Master already up to date for today - nothing to do.')
+        print('Master already up to date for today - nothing to do. (use --force to override)')
 
 
 if __name__ == '__main__':
+    import argparse
     import datetime
     from utils.logger import setup_logging
+
+    parser = argparse.ArgumentParser(description='GFI / Braemar broker ETL')
+    parser.add_argument('--force', action='store_true',
+                        help='ignore data/state.json (the cursor) and the once-per-day run gate; re-scan the full --days window')
+    parser.add_argument('--days', type=int, default=5,
+                        help='look-back window in days when there is no cursor / on --force (default: 5)')
+    cli = parser.parse_args()
+
     logpath = setup_logging()
-    print(f'=== broker_gfi run started {datetime.datetime.now():%Y-%m-%d %H:%M:%S} | log: {logpath} ===')
+    banner = f'=== broker_gfi run started {datetime.datetime.now():%Y-%m-%d %H:%M:%S} | log: {logpath}'
+    if cli.force:
+        banner += ' | FORCE'
+    print(banner + ' ===')
     try:
-        main(5)
+        main(cli.days, force=cli.force)
         print('=== run completed successfully ===')
     except Exception:
         import traceback
