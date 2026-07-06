@@ -10,7 +10,7 @@ from utils.read_xlsx_file import main as read_xlsx_file
 from utils.shorten_csv import processBroker
 from utils.state import get_cursor, set_cursor
 
-K_DRIVE_DEST = r'K:\price_gfi'
+K_DRIVE_DEST = r'K:\plm_prices'
 
 
 def copyToKDrive(paths):

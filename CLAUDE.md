@@ -29,7 +29,7 @@ Two parallel, near-identical pipelines run per invocation — **CSV** (GFI forma
 2. **Parse** (`utils/read_csv_file.py`, `utils/read_xlsx_file.py`): reshape each raw file into long format (`melt`), keep only routes containing `TD` (dirty tanker routes), and resolve period codes via the lookup (below).
 3. **Compile** (`csvCompiler` / `xlsxDownloader` in `main.py`): concatenate the newly parsed frames onto the existing master (`./data/GFI_csvs.csv` or `./data/GFI_xlsx.csv`), **dedupe on `['periodType','date','instrument','period']` keeping the last row**, and rewrite the master.
 4. **Shorten** (`utils/shorten_csv.py::processBroker`): write 30- and 60-day trailing windows to `./data/shortened/<name>_{30,60}.csv`.
-5. **Local export** (`main.py::copyToKDrive`): after a successful xlsx run, copy `GFI_xlsx.csv` and `data/shortened/GFI_xlsx_last.csv` to `K:\price_gfi`. Skipped silently if the folder doesn't exist (machine-specific sink).
+5. **Local export** (`main.py::copyToKDrive`): after a successful xlsx run, copy `GFI_xlsx.csv` and `data/shortened/GFI_xlsx_last.csv` to `K:\plm_prices`. Skipped silently if the folder doesn't exist (machine-specific sink).
 6. **Logging** (`utils/logger.py::setup_logging`): every `python main.py` invocation tees stdout+stderr to `./logs/run_<YYYY-MM-DD_HHMMSS>.log`; folder is auto-created.
 
 ### Period normalization (`lookup/periods.csv`)
