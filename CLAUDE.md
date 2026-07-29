@@ -1,61 +1,76 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code (claude.ai/code) when working in this repository.
 
 ## What this is
 
-A Windows-only ETL pipeline that ingests daily tanker freight broker quotes (GFI / Braemar) from a local Outlook inbox, normalizes them, appends to master CSVs, and publishes the results to AWS S3 (and, on the production box, a `K:` network drive). It powers freight rate data for crude trading. There is no build system or test suite — it is a small collection of pandas scripts driven by `main.py`, designed to be run on a schedule (e.g. hourly).
+A Windows-only, Outlook-driven ETL job for daily tanker-freight broker quotes (GFI / Braemar). It pulls two attachments out of a local Outlook folder, normalizes them, appends to two master CSVs, and publishes to AWS S3 plus the `K:\plm_prices` share. It feeds freight-rate data for crude trading.
+
+Not a package: no `pyproject.toml`, no `uv.lock`, no tests, no CI, no linter — just `main.py` + `utils/` and a pinned `requirements.txt`.
 
 ## Running
 
+Run from the repo root; every path is relative (`./data`, `./lookup`, `./logs`).
+
 ```bash
-python main.py                 # normal: cursor + once-per-day gate; only genuinely new reports processed
-python main.py --force         # ignore data/state.json (cursor) AND the once-per-day gate; re-scan the window
-python main.py --force --days 30   # same, but widen the look-back to 30 days (gap recovery after an outage)
+python main.py                     # normal: cursor + once-per-day gate; only genuinely new reports processed
+python main.py --force             # ignore data/state.json (cursor) AND the once-per-day gate; re-scan the window
+python main.py --force --days 30   # widen the look-back (gap recovery after an outage)
 ```
 
-- **CLI flags** (`main.py`): `--force` bypasses the `state.json` cursor (`since=None`) and the once-per-day run gate; `--days N` sets the look-back window (default 5). `--force` still respects the on-disk guard, so it won't re-download dates already saved, but it **always re-publishes the current master** — S3 upload + K: copy run even when no new rows result (the master file itself is only rewritten to disk when there actually are new rows). A normal (non-force) run still skips the upload entirely when nothing changed.
-- **Must run on Windows with Outlook installed and signed in** to the mailbox that receives the broker emails. The downloaders use `win32com.client` over MAPI and read the **`gfi` subfolder of the Inbox** (`GetDefaultFolder(6).Folders["gfi"]`) — broker emails are filed there, not the root Inbox. On any other environment the Outlook call fails (caught and logged) and no files are downloaded.
-- All paths are relative (`./data`, `./lookup`), so **always run from the repo root**.
-- **AWS credentials** for the S3 upload come from a local `.env` (see `.env.example`): `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_BUCKET`. `.env` is git-ignored — never commit it.
-- Each util file has an `if __name__ == '__main__'` block for exercising one stage in isolation, e.g. `python utils/read_csv_file.py` (edit the hardcoded sample filename inside first).
-- `notebook.ipynb` mirrors an **older** version of `main.py` (no cursor / change-detection); treat `main.py` as the source of truth.
+`--force` still respects the on-disk guard, so it won't re-download dates already saved, but it **always re-publishes the current master** to S3 and K: even when no new rows result (the master file itself is only rewritten when there genuinely are new rows).
 
-### Dependencies
-Pinned in `requirements.txt` (Python 3.13). Setup: `python -m venv .venv && .venv\Scripts\python.exe -m pip install -r requirements.txt`.
-Runtime deps: `pandas`, `numpy`, `openpyxl`, `pywin32`, `boto3`, `python-dotenv`.
+**Every run has live side effects** — it reads Outlook, rewrites `data/`, uploads to S3 and copies to `K:`. There is no dry-run flag.
+
+There is **no `.venv/` in this repo**; it runs on the machine's global Python 3.13 (Anaconda), which already has the pinned versions. To create one anyway:
+`python -m venv .venv && .venv\Scripts\python.exe -m pip install -r requirements.txt`
+
+`requirements.txt` is pinned for Python 3.13: `pandas`, `numpy`, `openpyxl`, `pywin32`, `boto3`, `python-dotenv`.
+
+### Prerequisites
+
+- **Windows with the Outlook desktop client signed in** to the mailbox that receives the broker mail. `utils/outlook_download.py` drives MAPI through `win32com.client`; anywhere else the Outlook call fails (caught and logged) and nothing downloads.
+- Mail must be filed into the **`gfi` Inbox subfolder** — `GetDefaultFolder(6).Folders["gfi"]`. The root Inbox is never scanned (this was the original "nothing downloads" bug).
+- `.env` must hold `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_BUCKET` (see `.env.example`). **There is currently no `.env` in this working tree**, so uploads fail fast and print `Cloud upload skipped` — local files are still produced. `utils/cloud.py` reads the vars with `os.environ[...]` at import, and that import is deliberately lazy and wrapped, which is why the missing-credentials error is swallowed.
+- No Windows Scheduled Task for this job is registered on this machine — it is invoked manually here; check the production box for the real schedule.
+- `notebook.ipynb` mirrors an **older** `main.py` (no cursor, no change detection). `main.py` is the source of truth.
 
 ## Architecture
 
-Two parallel, near-identical pipelines run per invocation — **CSV** (GFI format) and **XLSX** (Braemar format) — orchestrated in `main.py`. Built to be cheap on a schedule: a run with no new report makes one Outlook query and then does nothing (no downloads, no master rewrite, no upload).
+Two near-identical pipelines run per invocation — **CSV** (GFI format) and **XLSX** (Braemar format) — both orchestrated in `main.py`. Both attachments arrive on the *same* email.
 
-1. **Download** (`utils/downloader_csv.py`, `utils/downloader_xlsx.py`): read the `gfi` Inbox subfolder. Query only mail newer than the **cursor** (see below), or the last `dayStart` days when there is no cursor. Skip any date whose file is already on disk. Save new attachments to `./data/csv/<date>.csv` / `./data/xlsx/<date>.xlsx`. CSV matches attachments starting `GFI Bra`; XLSX those starting `Braemar`. Returns `(new_files, latest_seen)`.
-2. **Parse** (`utils/read_csv_file.py`, `utils/read_xlsx_file.py`): reshape each raw file into long format (`melt`), keep only routes containing `TD` (dirty tanker routes; filtered with `na=False` so a blank/trailing row can't crash it), and resolve period codes via the lookup (below).
-3. **Compile** (`csvCompiler` / `xlsxDownloader` in `main.py`): parse only the newly downloaded files, concat onto the existing master, **dedupe on `['periodType','date','instrument','period']` keeping the last row**, and rewrite the master. **If no new rows result, a normal run skips the rewrite, upload, and K: copy entirely** (change-aware). Under `--force`, the master is still not rewritten when there are no new rows, but the existing master is re-published to S3 and K: anyway.
-4. **Shorten + publish** (`utils/shorten_csv.py::processBroker`): write the most-recent-date (`_last`) and 30/60-day trailing windows to `./data/shortened/<name>_{last,30,60}.csv`, then upload the master and all three windows to `s3://<AWS_S3_BUCKET>/BROKER/MASTER/` via `utils/cloud.py`. Cloud errors are non-fatal (logged; pipeline continues).
-5. **K: export** (`main.py::copyToKDrive`): after a successful **xlsx** update, copy `GFI_xlsx.csv` and `GFI_xlsx_last.csv` to `K:\plm_prices`. Silently skipped if the drive isn't mounted (machine-specific sink); per-file copy errors are caught.
-6. **Logging** (`utils/logger.py::setup_logging`): every `python main.py` invocation tees stdout+stderr to `./logs/run_<YYYY-MM-DD_HHMMSS>.log`; folder auto-created.
+1. **Download** (`utils/downloader_csv.py`, `utils/downloader_xlsx.py` → shared loop in `utils/outlook_download.py`) — query the `gfi` folder for mail newer than the cursor (or the last `--days` when there is no cursor). CSV selects attachments named `GFI Bra*.csv`; XLSX selects `Braemar*.xlsx`. Files are written as `./data/{csv,xlsx}/<report-date>.{csv,xlsx}`. Returns `(new_files, latest_seen)`.
+2. **Parse** (`utils/read_csv_file.py`, `utils/read_xlsx_file.py`) — `melt` each raw file to long format, keep only routes containing `TD` (dirty tanker routes; `na=False` so a blank trailing row can't crash it), and resolve period codes through `lookup/periods.csv`.
+3. **Compile** (`csvCompiler` / `xlsxDownloader` in `main.py`) — parse only the newly downloaded files, concat onto the existing master, **dedupe on `['periodType','date','instrument','period']` keeping last**, rewrite. If no new rows result, a normal run skips the rewrite, upload and K: copy entirely.
+4. **Publish** (`utils/shorten_csv.py::processBroker`) — writes `data/shortened/<name>_{last,60,30}.csv`, then uploads the master plus all three windows to `s3://<AWS_S3_BUCKET>/BROKER/MASTER/`.
+5. **K: mirror** (`main.py::copyToKDrive`) — **only the xlsx pipeline** mirrors; it copies `GFI_xlsx.csv` and `GFI_xlsx_last.csv` to `K:\plm_prices`. The csv pipeline never touches K:. Skipped with a log line when the drive isn't mounted.
+6. **Logging** (`utils/logger.py::setup_logging`) — tees stdout+stderr to `./logs/run_<YYYY-MM-DD_HHMMSS>.log`, one file per invocation.
 
-### Incremental cursor (`data/state.json`)
-`utils/state.py` stores a per-pipeline high-water-mark (last processed email `ReceivedTime`) in `data/state.json` (git-ignored, self-healing). Each run asks Outlook only for mail newer than the cursor (minus a 1-day safety margin), so a quiet tick returns nothing and exits fast. The on-disk check and the "no new rows" guard are the correctness nets — the cursor only *narrows* the query and can never cause a report to be skipped.
+### File naming comes from the xlsx's *internal* date, not the subject (`utils/report_date.py`)
+This is the single most important non-obvious rule here. The subject line is unreliable — the broker mislabels sends and files amendments under the wrong date — so `report_datestr()` saves the `Braemar*.xlsx` attachment to a temp file, reads the trading date out of **cell row 3 / col 1** (`df.iloc[2, 0]`), and uses that `YYYY-MM-DD` for **both** pipelines' filenames. Consequences:
+
+- If the date can't be resolved the message is **skipped entirely** and nothing is written — `_DATE_RE` guarantees no non-`YYYY-MM-DD` filename ever hits disk.
+- A csv can therefore only be saved when its sibling xlsx is present and parseable.
+- Subjects matching `\b(correction|amendment)\b` (`is_amendment`) **overwrite** the date they correct; a plain resend of a date already on disk is skipped.
+- Reading the date means an extra `SaveAsFile` + `read_excel` per candidate message, so the Outlook scan is not free — that is why the cursor matters.
+
+### Cursor (`data/state.json`)
+`utils/state.py` keeps a per-pipeline high-water-mark (last processed email `ReceivedTime`) under keys `GFI_csvs` and `GFI_xlsx`. Each run asks Outlook only for mail newer than the cursor minus a 1-day margin. Git-ignored and self-healing; the on-disk check and the no-new-rows guard are the correctness nets, so the cursor can only *narrow* the query.
 
 ### Period normalization (`lookup/periods.csv`)
-Maps broker period codes → `plmName` (concrete date) and `periodicity`, which becomes the output `periodType`. Codes: `BITR`, `MTD`, `M` (monthly), `Q` (quarterly), `A` (annual); `H` (half-year) is reserved for future data (none currently). Codes with no mapping — and `BITR`/`MTD` — fall back to the **beginning of the report month**. This lookup is the single source of truth both for dating quote labels **and for the `periodType` codes** (change a code here and it propagates to both pipelines); both parse stages merge against it.
+700 rows mapping a broker period code → `plmName` (a concrete date) and `periodicity`, which becomes the output `periodType`. Codes: `BITR`, `MTD`, `M`, `Q`, `A` (`H` is reserved; no data currently). `BITR`/`MTD` and any unmapped code fall back to the **beginning of the report month**. This file is the single source of truth for both the period dates and the `periodType` values, and both parse stages merge against it.
 
-### Output schemas (they differ between pipelines)
-- CSV master: `source, periodType, date, instrument, period, price`
-- XLSX master: `source, periodType, date, instrument, period, uom, value` (retains unit-of-measure; the XLSX parser normalizes units — `WS`→`WSC`, `$/TONNE`→`PMT` — and special-cases `TD22` to `LSM`).
+### The two masters have different schemas
+- `data/GFI_csvs.csv`: `source, periodType, date, instrument, period, price` — **no `uom`, and the value column is `price`**.
+- `data/GFI_xlsx.csv`: `source, periodType, date, instrument, period, uom, value`. The xlsx parser normalizes units (`WS`→`WSC`, `$/TONNE`→`PMT`) and special-cases `TD22`: its `BITR` value is divided by 1,000,000 and its `uom` forced to `LSM`.
 
-### Run gating (two layers, for cheap scheduled runs)
-1. `checkRunCondition()` — a cheap once-per-day guard: the pipelines run only when `today > max(date)` in `GFI_csvs.csv` (keyed off the **CSV** master, which also gates XLSX). Once today's report is ingested, further runs that day skip without opening Outlook.
-2. The **cursor** + **new-file-on-disk** + **no-new-rows** checks (above) make any run that *does* open Outlook cheap when nothing has changed.
+Also note the csv master uses route codes like `TD3C` where the xlsx master uses `TD3` — they are not row-for-row comparable.
 
 ## Gotchas
 
-- **Broker emails live in the `gfi` Inbox subfolder**, not the root Inbox — the downloaders navigate to `GetDefaultFolder(6).Folders["gfi"]`. Scanning the root Inbox finds nothing (this was the "nothing downloads" bug).
-- **Attachment filenames come from `message.Subject[-10:]`** (last 10 chars = the `YYYY-MM-DD` date). Correction emails are skipped via a `\b(correction|CORRECTION)\b` regex, but subjects like `(correction)` can slip through and produce garbage files such as `orrection).csv`. Watch for stray non-date filenames.
-- **`processBroker`'s `masterFolder='./data/master/'` argument is vestigial** — `./data/master/` isn't written to; `shorten_csv.py` writes under `./data/shortened/` and uploads to S3. `cloudFolder='BROKER/MASTER'` is the live S3 prefix. (An earlier version uploaded to Aliyun OSS; that path is gone.)
-- **`data/state.json` (cursor), `.env` (secrets), `.venv/`, and `logs/` are git-ignored.** The cursor and logs rebuild themselves; `.env` must exist locally for S3 uploads to work.
-- Data CSVs under `./data/` are committed and are the pipeline's persistent state; the scripts read and overwrite them in place.
-- **Re-writing `./data/shortened/*.csv` produces cosmetic float churn.** Any run that publishes (esp. `--force`) rewrites the window files, dropping trailing zeros (`296.60`→`296.6`) with no real data change. When committing after a run, add only the files you actually changed (e.g. `git add main.py CLAUDE.md`) — don't `git add -A` and sweep in the reformatted data CSVs.
-- **`git push` can't authenticate from the tool shell** — it hangs on a credential prompt with no tty (`could not read Username for github.com`). Push from the interactive session instead: type `!git push`.
+- **Import-time side effects.** Merely importing these modules does real work from the *current working directory*: `main.py` calls `checkRunCondition()` at module level (line 35, reads `data/GFI_csvs.csv`), `utils/read_csv_file.py` and `utils/read_xlsx_file.py` read `lookup/periods.csv` at import, and `read_xlsx_file` also does an unused `os.listdir('./data/xlsx')`. Import from anywhere but the repo root and you get a `FileNotFoundError` before any of your code runs.
+- **The once-per-day gate is keyed off the CSV master only.** `checkRunCondition()` compares today against `max(date)` in `GFI_csvs.csv` and gates *both* pipelines — if the xlsx master ever falls behind while the csv master is current, the run short-circuits and the xlsx side never catches up. Use `--force`.
+- **`processBroker`'s `masterFolder='./data/master/'` argument is dead** — it is never read and `data/master/` does not exist. Extracts land in `data/shortened/`; `cloudFolder='BROKER/MASTER'` is the live S3 prefix.
+- **Tracked vs ignored**: both masters, `data/shortened/*.csv` and `lookup/periods.csv` are committed and are the pipeline's persistent state. `data/csv/` and `data/xlsx/` raw downloads are also tracked. `data/state.json`, `.env`, `.venv/` and `logs/` are ignored.
+- **Publishing rewrites the window CSVs and causes cosmetic float churn** (`296.60`→`296.6`) with no real data change. After a run, stage only the files you actually meant to change — don't `git add -A`.
+- Stale `utils/__pycache__/*.cpython-311.pyc` files are checked into git even though the pins target 3.13; ignore them, they are not used.
