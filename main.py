@@ -8,6 +8,8 @@ from utils.read_csv_file import main as read_csv_file
 
 from utils.downloader_xlsx import main as downloader_xlsx
 from utils.read_xlsx_file import main as read_xlsx_file
+from utils.downloader_josh import main as downloader_josh
+from utils.read_josh_file import main as read_josh_file
 from utils.shorten_csv import processBroker
 from utils.state import get_cursor, set_cursor
 
@@ -127,11 +129,64 @@ def xlsxDownloader(counter, force=False):
     return df
 
 
+def seedJoshMaster():
+    """Build data/GFI_josh.csv from every file currently in ./data/josh.
+
+    One-time bootstrap: parses all fixtures, dedupes, writes the master. Safe to
+    re-run (idempotent — dedupe on the 5-key keeps the last row)."""
+    files = sorted(f for f in os.listdir('./data/josh') if f.endswith('.xlsx'))
+    parts = [read_josh_file(f) for f in files]
+    df = pd.concat(parts) if parts else pd.DataFrame(
+        columns=['source', 'periodType', 'date', 'instrument', 'period', 'uom', 'value'])
+    df = df.drop_duplicates(
+        subset=['periodType', 'date', 'instrument', 'period', 'uom'], keep='last')
+    df.to_csv('./data/GFI_josh.csv', index=False)
+    print(f'JOSH: seeded master from {len(files)} file(s): {len(df)} rows')
+    return df
+
+
+def joshDownloader(counter, force=False):
+    since = None if force else get_cursor('GFI_josh')
+    newFiles, latest = downloader_josh(counter, since)
+    if latest is not None:
+        set_cursor('GFI_josh', latest)
+
+    newFiles = sorted(newFiles)
+    masterFile = pd.read_csv('./data/GFI_josh.csv', parse_dates=['date', 'period'])
+    rowsBefore = len(masterFile)
+
+    parts = [masterFile]
+    if newFiles:
+        print(f'JOSH: {len(newFiles)} new file(s): {newFiles}')
+        for file in newFiles:
+            parts.append(read_josh_file(file))
+    else:
+        print('JOSH: no new reports')
+
+    df = pd.concat(parts)
+    df = df.drop_duplicates(
+        subset=['periodType', 'date', 'instrument', 'period', 'uom'], keep='last')
+    newRows = len(df) > rowsBefore
+
+    if not newRows and not force:
+        print('JOSH: nothing new - skipping upload')
+        return None
+
+    if newRows:
+        df.to_csv('./data/GFI_josh.csv', index=False)
+    else:
+        print('JOSH: [FORCED] no new rows - re-publishing existing master')
+    processBroker(df, './data/', 'GFI_josh', './data/master/', 'BROKER/MASTER')
+    copyToKDrive(['./data/GFI_josh.csv', './data/shortened/GFI_josh_last.csv'])
+    return df
+
+
 def main(counter, force=False):
     print(f'Run condition (today > latest date in master): {runFunctionCheck}{" [FORCED]" if force else ""}')
     if force or runFunctionCheck == True:
         csvCompiler(counter, force)
         xlsxDownloader(counter, force)
+        joshDownloader(counter, force)
     else:
         print('Master already up to date for today - nothing to do. (use --force to override)')
 
