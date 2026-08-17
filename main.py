@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 import os
 import shutil
 
@@ -70,6 +71,26 @@ def csvCompiler(counter, force=False):
     return df
 
 
+def mtdFromCsvMaster():
+    """The Braemar xlsx feed has no MTD (month-to-date) field - only the GFI csv
+    feed does. Pull the MTD rows out of the csv master and reshape them to the
+    xlsx schema so GFI_xlsx.csv carries them too. Read fresh from disk each run
+    (csvCompiler runs first, so the csv master is already current)."""
+    cols = ['source', 'periodType', 'date', 'instrument', 'period', 'uom', 'value']
+    csvMaster = pd.read_csv('./data/GFI_csvs.csv', parse_dates=['date', 'period'])
+    mtd = csvMaster[csvMaster['periodType'] == 'MTD'].copy()
+    if mtd.empty:
+        return pd.DataFrame(columns=cols)
+
+    mtd['instrument'] = mtd['instrument'].replace({'TD3C': 'TD3'})  # xlsx names this route TD3
+    mtd = mtd.rename(columns={'price': 'value'})
+    # LSM for TD22 (÷1e6, matching the xlsx feed's LSM convention), WSC for the rest
+    mtd['uom'] = np.where(mtd['instrument'] == 'TD22', 'LSM', 'WSC')
+    mtd['value'] = np.where(mtd['instrument'] == 'TD22', mtd['value'] / 1_000_000, mtd['value'])
+    mtd['source'] = 'GFI'
+    return mtd[cols]
+
+
 def xlsxDownloader(counter, force=False):
     since = None if force else get_cursor('GFI_xlsx')
     newFiles, latest = downloader_xlsx(counter, since)
@@ -78,20 +99,20 @@ def xlsxDownloader(counter, force=False):
 
     newFiles = sorted(newFiles)
     masterFile = pd.read_csv('./data/GFI_xlsx.csv', parse_dates=['date','period'])
+    rowsBefore = len(masterFile)
 
+    parts = [masterFile]
     if newFiles:
         print(f'XLSX: {len(newFiles)} new file(s): {newFiles}')
-        df = pd.DataFrame()
         for file in newFiles:
-            df = pd.concat([df, read_xlsx_file(file)])
-        rowsBefore = len(masterFile)
-        df = pd.concat([masterFile, df])
-        df = df.drop_duplicates(subset=['periodType', 'date', 'instrument', 'period'], keep='last')
-        newRows = len(df) > rowsBefore
+            parts.append(read_xlsx_file(file))
     else:
         print('XLSX: no new reports')
-        df = masterFile
-        newRows = False
+    parts.append(mtdFromCsvMaster())  # MTD carried over from the csv feed (xlsx has none)
+
+    df = pd.concat(parts)
+    df = df.drop_duplicates(subset=['periodType', 'date', 'instrument', 'period'], keep='last')
+    newRows = len(df) > rowsBefore
 
     if not newRows and not force:
         print('XLSX: nothing new - skipping upload')
