@@ -19,15 +19,19 @@ def _to_local(dt):
     return datetime.datetime.fromtimestamp(dt.timestamp())
 
 
-def download_reports(subfolder, ext, attachment_match, dayStart, since=None):
+def download_reports(subfolder, ext, attachment_match, dayStart, since=None, date_resolver=None):
     """Download this pipeline's attachments from the `gfi` Outlook subfolder.
 
     `subfolder`/`ext` place and name the output (e.g. 'csv'/'.csv'); the file is
     named `<internal-date><ext>`. `attachment_match(filename) -> bool` selects
     this pipeline's attachment. If `since` (a naive-local cursor) is given, only
     mail from ~1 day before it is examined; otherwise the last `dayStart` days.
-    Returns (new_files, latest_seen); latest_seen is the newest ReceivedTime
-    among messages accounted for, used to advance the caller's cursor."""
+    `date_resolver(message) -> str | None` resolves the report date; defaults to
+    the Braemar `report_datestr` when not given. Returns (new_files, latest_seen);
+    latest_seen is the newest ReceivedTime among messages accounted for, used to
+    advance the caller's cursor."""
+    if date_resolver is None:
+        date_resolver = report_datestr  # existing Braemar-xlsx behavior
     new_files = []
     latest_seen = None
     dest_dir = os.path.join(os.getcwd(), './data', subfolder)
@@ -45,7 +49,7 @@ def download_reports(subfolder, ext, attachment_match, dayStart, since=None):
 
         for message in messages:
             received = _to_local(message.ReceivedTime)
-            datestr = report_datestr(message)
+            datestr = date_resolver(message)
             if datestr is None:
                 # no xlsx / unparseable date -> never write a non-date filename
                 print(f"Skipping (no valid report date): {message.Subject!r}")

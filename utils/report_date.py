@@ -85,3 +85,60 @@ def report_datestr(message):
 def is_amendment(subject):
     """True when the subject marks an amendment/correction (case-insensitive)."""
     return bool(_AMENDMENT_RE.search(subject or ''))
+
+
+_CURVES_PREFIX = 'Curves'
+
+
+def read_curves_date(path):
+    """The report date from a Josh Curves xlsx (cell iloc[0,0]).
+
+    Returns a pandas.Timestamp, or None if the file/cell can't be parsed."""
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            df = pd.read_excel(path, header=None)
+        return pd.to_datetime(df.iloc[0, 0])
+    except Exception:
+        return None
+
+
+def _curves_attachment(message):
+    for attachment in message.Attachments:
+        name = attachment.FileName
+        if name.startswith(_CURVES_PREFIX) and name.endswith(_XLSX_SUFFIX):
+            return attachment
+    return None
+
+
+def resolve_curves_date(message):
+    """Read the report date from the message's `Curves*.xlsx` attachment."""
+    attachment = _curves_attachment(message)
+    if attachment is None:
+        return None
+    fd, tmp = tempfile.mkstemp(suffix='.xlsx', prefix='josh_probe_')
+    os.close(fd)
+    try:
+        attachment.SaveAsFile(tmp)
+        return read_curves_date(tmp)
+    except Exception:
+        return None
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
+def josh_report_datestr(message):
+    """Resolve the josh report date as a validated `YYYY-MM-DD` string, or None.
+
+    None means: no Curves attachment, or an unparseable/badly-shaped date.
+    Callers MUST treat None as 'save nothing'."""
+    date = resolve_curves_date(message)
+    if date is None:
+        return None
+    datestr = date.strftime('%Y-%m-%d')
+    if not _DATE_RE.match(datestr):
+        return None
+    return datestr
