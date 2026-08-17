@@ -27,7 +27,7 @@ Runtime deps: `pandas`, `numpy`, `openpyxl`, `pywin32`, `boto3`, `python-dotenv`
 
 ## Architecture
 
-Two parallel, near-identical pipelines run per invocation — **CSV** (GFI format) and **XLSX** (Braemar format) — orchestrated in `main.py`. Built to be cheap on a schedule: a run with no new report makes one Outlook query and then does nothing (no downloads, no master rewrite, no upload).
+Three pipelines run per invocation — **CSV** (GFI format) and **XLSX** (Braemar format), which are near-identical, plus **JOSH** (Josh Smithson's "GFI FFA Curves" file), which shares the plumbing but has its own parser (see the JOSH subsection below). All are orchestrated in `main.py`. Built to be cheap on a schedule: a run with no new report makes one Outlook query and then does nothing (no downloads, no master rewrite, no upload).
 
 1. **Download** (`utils/downloader_csv.py`, `utils/downloader_xlsx.py` — thin wrappers over the shared `utils/outlook_download.py`): read the `gfi` Inbox subfolder. Query only mail newer than the **cursor** (see below), or the last `dayStart` days when there is no cursor. **The report date is read from the xlsx's internal date cell (`utils/report_date.py`), never the email subject**, so both attachments in an email are named `<internal-date>.csv` / `.xlsx`. A date already on disk is skipped, **except** an amendment/correction (subject matches `correction|amendment`), which overwrites that date and re-compiles. **Nothing is written unless the name is a bare `YYYY-MM-DD`** (unparseable date → logged skip). CSV matches attachments starting `GFI Bra`; XLSX those starting `Braemar`. Returns `(new_files, latest_seen)`.
 2. **Parse** (`utils/read_csv_file.py`, `utils/read_xlsx_file.py`): reshape each raw file into long format (`melt`), keep only routes containing `TD` (dirty tanker routes; filtered with `na=False` so a blank/trailing row can't crash it), and resolve period codes via the lookup (below).
@@ -35,6 +35,14 @@ Two parallel, near-identical pipelines run per invocation — **CSV** (GFI forma
 4. **Shorten + publish** (`utils/shorten_csv.py::processBroker`): write the most-recent-date (`_last`) and 30/60-day trailing windows to `./data/shortened/<name>_{last,30,60}.csv`, then upload the master and all three windows to `s3://<AWS_S3_BUCKET>/BROKER/MASTER/` via `utils/cloud.py`. Cloud errors are non-fatal (logged; pipeline continues).
 5. **K: export** (`main.py::copyToKDrive`): after a successful **xlsx** update, copy `GFI_xlsx.csv` and `GFI_xlsx_last.csv` to `K:\plm_prices`. Silently skipped if the drive isn't mounted (machine-specific sink); per-file copy errors are caught.
 6. **Logging** (`utils/logger.py::setup_logging`): every `python main.py` invocation tees stdout+stderr to `./logs/run_<YYYY-MM-DD_HHMMSS>.log`; folder auto-created.
+
+### JOSH pipeline (`GFI_josh.csv`) — the third feed
+Ingests Josh Smithson's daily **"GFI FFA Curves"** email (`josh.smithson@braemar.com`), whose single data attachment is `Curves DDMMYY.xlsx`. An Outlook rule files his mail into the same **`gfi` subfolder** the other two scan, so all three coexist there; the pipelines don't collide because each matches its own attachment (`GFI Bra*` / `Braemar*` / `Curves*.xlsx`) and each has its own date resolver that returns None for the others' mail.
+
+- **Download** (`utils/downloader_josh.py`): reuses the shared `download_reports` loop via a new `date_resolver` hook (default = the Braemar `iloc[2,0]` behavior; josh passes `josh_report_datestr`). **Josh's report date is cell `iloc[0,0]`** of the Curves file (not `iloc[2,0]`). Files saved to `data/josh/<YYYY-MM-DD>.xlsx`; cursor key `GFI_josh`.
+- **Parse** (`utils/read_josh_file.py`): the Curves file is transposed vs. the Braemar xlsx (instruments across columns, tenors down rows) and stacks two curve blocks — **World Scale** (`uom=WSC`) and **USD/Tonne** (`uom=PMT`) — plus a `WSFR` flat-rate row and a `Linked` **BITR** table. Keeps a curated instrument set via **`lookup/josh_instruments.csv`** (`header,instrument,lsm`): the 8 TD routes (names normalized, e.g. `TD3 C`→`TD3C`, `TD20 inc`→`TD20`) plus `USG Afra Exc`/`USG Afra Inc`; everything else (TC*, BLPG*, `X-UK Cont P.`) dropped. Month-range strips (`Aug-Dec'26`) are dropped. `TD22`/`TD28` are `uom=LSM` in the WS block (no division — they're already at LSM scale there); **only the `Linked`-table BITR value for `TD22` is ÷1e6** (it's reported in raw millions there).
+- **Compile + publish** (`main.py::joshDownloader`, seeded once by `seedJoshMaster`): same change-aware compile as xlsx, then full publish (shortened windows + S3 + K: copy of `GFI_josh.csv` / `GFI_josh_last.csv`). No MTD carry-over (that's xlsx-only).
+- **New codes:** `periodType` adds `BAL` (real balance-of-month, dated to the first of the report month — the csv/xlsx feeds lack it) and `WSFR`; `uom` adds `LSM` and `WSFR`. **Dedupe key includes `uom`** (`['periodType','date','instrument','period','uom']`) since josh carries the same quote in multiple units.
 
 ### Incremental cursor (`data/state.json`)
 `utils/state.py` stores a per-pipeline high-water-mark (last processed email `ReceivedTime`) in `data/state.json` (git-ignored, self-healing). Each run asks Outlook only for mail newer than the cursor (minus a 1-day safety margin), so a quiet tick returns nothing and exits fast. The on-disk check and the "no new rows" guard are the correctness nets — the cursor only *narrows* the query and can never cause a report to be skipped.
@@ -45,9 +53,10 @@ Maps broker period codes → `plmName` (concrete date) and `periodicity`, which 
 ### Output schemas (they differ between pipelines)
 - CSV master: `source, periodType, date, instrument, period, price`
 - XLSX master: `source, periodType, date, instrument, period, uom, value` (retains unit-of-measure; the XLSX parser normalizes units — `WS`→`WSC`, `$/TONNE`→`PMT` — and special-cases `TD22` to `LSM`).
+- JOSH master (`GFI_josh.csv`): same columns as XLSX — `source, periodType, date, instrument, period, uom, value` — but a wider vocab (`periodType` adds `BAL`/`WSFR`, `uom` adds `WSFR`) and a 5-key dedupe including `uom`. See the JOSH pipeline subsection above.
 
 ### Run gating (two layers, for cheap scheduled runs)
-1. `checkRunCondition()` — a cheap once-per-day guard: the pipelines run only when `today > max(date)` in `GFI_csvs.csv` (keyed off the **CSV** master, which also gates XLSX). Once today's report is ingested, further runs that day skip without opening Outlook.
+1. `checkRunCondition()` — a cheap once-per-day guard: the pipelines run only when `today > max(date)` in `GFI_csvs.csv` (keyed off the **CSV** master, which also gates XLSX and JOSH). Once today's report is ingested, further runs that day skip without opening Outlook.
 2. The **cursor** + **new-file-on-disk** + **no-new-rows** checks (above) make any run that *does* open Outlook cheap when nothing has changed.
 
 ## Gotchas
