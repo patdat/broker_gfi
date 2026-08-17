@@ -154,7 +154,7 @@ def _parse_bitr(df, keepset_lsm, report_date):
 def _assemble(rows, report_date):
     """Rows -> cleaned, deduped, schema-ordered DataFrame."""
     out = pd.DataFrame(rows, columns=['instrument', 'period', 'periodType', 'uom', 'value'])
-    out['value'] = pd.to_numeric(out['value'], errors='coerce')
+    out['value'] = pd.to_numeric(out['value'], errors='coerce').round(2)
     out = out.dropna(subset=['value'])
     out['period'] = pd.to_datetime(out['period'])
     out['source'] = 'GFI'

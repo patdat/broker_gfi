@@ -27,8 +27,8 @@ def test_wsfr_and_bitr():
     # BITR from the Linked table, period = first of report month
     assert _val(df, 'TD3C', 'BITR', 'WSC', '2026-08-01') == 501.67
     assert _val(df, 'TD25', 'BITR', 'WSC', '2026-08-01') == 377.22
-    # TD22 BITR is in raw millions in the Linked table -> /1e6, uom LSM
-    assert abs(_val(df, 'TD22', 'BITR', 'LSM', '2026-08-01') - 18.791667) < 1e-6
+    # TD22 BITR is in raw millions in the Linked table -> /1e6, uom LSM, rounded to 2dp
+    assert _val(df, 'TD22', 'BITR', 'LSM', '2026-08-01') == 18.79  # 18.791667 -> 18.79
 
     # TD28 and USG Afra are not in the Linked table -> no BITR rows
     assert df[(df.instrument == 'TD28') & (df.periodType == 'BITR')].empty

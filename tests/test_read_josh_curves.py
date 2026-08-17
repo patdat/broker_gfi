@@ -26,18 +26,18 @@ def test_curve_values():
     assert (df['source'] == 'GFI').all()
     assert (df['date'] == pd.Timestamp('2026-08-17')).all()
 
-    # WSC front-month + Balmo + PMT
+    # WSC front-month + Balmo + PMT (values rounded to 2 decimals in the parser)
     assert _val(df, 'TD3C', 'M', 'WSC', '2026-08-01') == 470
-    assert abs(_val(df, 'TD3C', 'BAL', 'WSC', '2026-08-01') - 470.18555555555554) < 1e-6
-    assert abs(_val(df, 'TD3C', 'M', 'PMT', '2026-08-01') - 94.987) < 1e-3
+    assert _val(df, 'TD3C', 'BAL', 'WSC', '2026-08-01') == 470.19  # 470.18555... -> 470.19
+    assert _val(df, 'TD3C', 'M', 'PMT', '2026-08-01') == 94.99  # 94.987 -> 94.99
 
     # LSM routes in the WS block (no division)
     assert _val(df, 'TD22', 'M', 'LSM', '2026-08-01') == 19.5
-    assert abs(_val(df, 'TD28', 'BAL', 'LSM', '2026-08-01') - 2.637037222222222) < 1e-6
+    assert _val(df, 'TD28', 'BAL', 'LSM', '2026-08-01') == 2.64  # 2.63703... -> 2.64
 
     # quarter + cal tenor resolution
     assert _val(df, 'TD3C', 'Q', 'WSC', '2026-10-01') == 440
-    assert abs(_val(df, 'TD3C', 'A', 'WSC', '2027-01-01') - 275.85353785254824) < 1e-6
+    assert _val(df, 'TD3C', 'A', 'WSC', '2027-01-01') == 275.85  # 275.85353... -> 275.85
 
     # USG Afra kept, verbatim-ish names
     assert _val(df, 'USG Afra Exc', 'M', 'WSC', '2026-08-01') == 345.46
