@@ -48,8 +48,8 @@ def test_curve_values():
     assert df[df.instrument.str.startswith('BLPG')].empty
     assert df[df.instrument.str.contains('UK')].empty
 
-    # strip dropped: TD3C WSC has exactly BAL(1)+months(8)+quarters(7)+cals(3)=19 rows
-    assert len(df[(df.instrument == 'TD3C') & (df.uom == 'WSC')]) == 19
+    # strip dropped: TD3C WSC has exactly BAL(1)+months(8)+quarters(7)+cals(3)+BITR(1)=20 rows
+    assert len(df[(df.instrument == 'TD3C') & (df.uom == 'WSC')]) == 20
 
     print('test_curve_values OK')
 
