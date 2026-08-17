@@ -94,6 +94,55 @@ def _parse_block(df, r0, r1, imap, periods, report_date, block_uom):
     return rows
 
 
+_WSFR_ROW = 22  # flat-rate row, one value per instrument column
+
+
+def _parse_wsfr(df, imap, report_date):
+    """WSFR flat rates (row 22): one row per kept instrument with a value.
+
+    period = first of report month; periodType = uom = 'WSFR'."""
+    header = df.iloc[0]
+    period = pd.Timestamp(report_date).replace(day=1)
+    rows = []
+    for c in range(1, df.shape[1]):
+        raw = str(header[c]).strip()
+        if raw not in imap:
+            continue
+        instrument, _ = imap[raw]
+        val = df.iloc[_WSFR_ROW, c]
+        if pd.isna(val):
+            continue
+        rows.append((instrument, period, 'WSFR', 'WSFR', val))
+    return rows
+
+
+def _parse_bitr(df, keepset_lsm, report_date):
+    """BITR from the `Linked` table (col 1), routes down the rows.
+
+    keepset_lsm maps a space-stripped instrument name -> lsm_flag. Matches the
+    linked route names (which use e.g. 'TD3 C', 'TD20', 'TD25' — different from
+    the curve headers). TD22's BITR is in raw millions there, so /1e6 + uom LSM;
+    all others are uom WSC. period = first of report month."""
+    period = pd.Timestamp(report_date).replace(day=1)
+    rows = []
+    for r in range(df.shape[0]):
+        name = df.iloc[r, 0]
+        if not isinstance(name, str):
+            continue
+        canon = name.replace(' ', '').strip()
+        if canon not in keepset_lsm:
+            continue
+        val = df.iloc[r, 1]
+        if pd.isna(val):
+            continue
+        if keepset_lsm[canon]:
+            uom, val = 'LSM', val / 1e6
+        else:
+            uom = 'WSC'
+        rows.append((canon, period, 'BITR', uom, val))
+    return rows
+
+
 def _assemble(rows, report_date):
     """Rows -> cleaned, deduped, schema-ordered DataFrame."""
     out = pd.DataFrame(rows, columns=['instrument', 'period', 'periodType', 'uom', 'value'])
@@ -114,10 +163,13 @@ def readFile(file):
     report_date = pd.to_datetime(df.iloc[0, 0])
     imap = load_instrument_map()
     periods = load_periods()
+    keepset_lsm = {inst.replace(' ', ''): lsm for (inst, lsm) in imap.values()}
 
     rows = []
     rows += _parse_block(df, *_WSC_BLOCK, imap, periods, report_date, 'WSC')
     rows += _parse_block(df, *_PMT_BLOCK, imap, periods, report_date, 'PMT')
+    rows += _parse_wsfr(df, imap, report_date)
+    rows += _parse_bitr(df, keepset_lsm, report_date)
     return _assemble(rows, report_date)
 
 
