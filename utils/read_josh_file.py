@@ -10,7 +10,6 @@ Nothing here touches Outlook; it operates on a file already in ./data/josh."""
 import os
 import re
 import warnings
-import numpy as np
 import pandas as pd
 
 warnings.simplefilter('ignore')
@@ -75,8 +74,12 @@ def resolve_tenor(label, report_date, periods):
     return (hit[0], hit[1]) if hit is not None else None
 
 
-def _parse_block(df, r0, r1, imap, periods, report_date, block_uom):
-    """Melt one curve block into rows: (instrument, period, periodType, uom, value)."""
+def _parse_block(df, r0, r1, imap, periods, report_date, block_uom, unmapped=None):
+    """Melt one curve block into rows: (instrument, period, periodType, uom, value).
+
+    `unmapped`, if given, is a shared set collecting tenor labels (row 0 of each
+    block row) that resolve_tenor() dropped but that are NOT a recognized strip
+    and NOT blank/NaN -- i.e. genuinely unrecognized, possibly format drift."""
     header = df.iloc[0]
     rows = []
     for c in range(1, df.shape[1]):
@@ -85,8 +88,13 @@ def _parse_block(df, r0, r1, imap, periods, report_date, block_uom):
             continue
         instrument, lsm = imap[raw]
         for r in range(r0, r1 + 1):
-            resolved = resolve_tenor(df.iloc[r, 0], report_date, periods)
+            label = df.iloc[r, 0]
+            resolved = resolve_tenor(label, report_date, periods)
             if resolved is None:
+                if unmapped is not None and not pd.isna(label):
+                    s = str(label).strip()
+                    if s and not _STRIP_RE.match(s):
+                        unmapped.add(s)
                 continue
             period, ptype = resolved
             uom = 'LSM' if (block_uom == 'WSC' and lsm) else block_uom
@@ -165,11 +173,14 @@ def readFile(file):
     periods = load_periods()
     keepset_lsm = {inst.replace(' ', ''): lsm for (inst, lsm) in imap.values()}
 
+    unmapped = set()
     rows = []
-    rows += _parse_block(df, *_WSC_BLOCK, imap, periods, report_date, 'WSC')
-    rows += _parse_block(df, *_PMT_BLOCK, imap, periods, report_date, 'PMT')
+    rows += _parse_block(df, *_WSC_BLOCK, imap, periods, report_date, 'WSC', unmapped)
+    rows += _parse_block(df, *_PMT_BLOCK, imap, periods, report_date, 'PMT', unmapped)
     rows += _parse_wsfr(df, imap, report_date)
     rows += _parse_bitr(df, keepset_lsm, report_date)
+    if unmapped:
+        print(f"JOSH parse [{file}]: unrecognized tenor label(s) dropped (possible format drift): {sorted(unmapped)}")
     return _assemble(rows, report_date)
 
 
