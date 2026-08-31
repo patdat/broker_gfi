@@ -11,6 +11,7 @@ from utils.read_xlsx_file import main as read_xlsx_file
 from utils.downloader_josh import main as downloader_josh
 from utils.read_josh_file import main as read_josh_file
 from utils.shorten_csv import processBroker
+from utils.cash_arb import build_cash_arb
 from utils.state import get_cursor, set_cursor
 
 K_DRIVE_DEST = r'K:\plm_prices'
@@ -187,6 +188,9 @@ def main(counter, force=False):
         csvCompiler(counter, force)
         xlsxDownloader(counter, force)
         joshDownloader(counter, force)
+        # combined TD7/TD25 cash-arb parquet (josh wins by date); reads the
+        # masters fresh, so it reflects whatever the three pipelines just wrote
+        build_cash_arb()
     else:
         print('Master already up to date for today - nothing to do. (use --force to override)')
 
