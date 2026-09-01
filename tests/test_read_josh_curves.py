@@ -39,9 +39,12 @@ def test_curve_values():
     assert _val(df, 'TD3C', 'Q', 'WSC', '2026-10-01') == 440
     assert _val(df, 'TD3C', 'A', 'WSC', '2027-01-01') == 275.85  # 275.85353... -> 275.85
 
-    # USG Afra kept, verbatim-ish names
-    assert _val(df, 'USG Afra Exc', 'M', 'WSC', '2026-08-01') == 345.46
-    assert _val(df, 'USG Afra Inc', 'M', 'WSC', '2026-08-01') == 360
+    # USG Afra relabeled: Inc -> TD25 (the real TD25), Exc -> TD25E
+    assert _val(df, 'TD25E', 'M', 'WSC', '2026-08-01') == 345.46  # was 'USG Afra Exc'
+    assert _val(df, 'TD25', 'M', 'WSC', '2026-08-01') == 360      # was 'USG Afra Inc'
+    # 'TD25 inc' is dropped: TD25 == 360 (USG Afra Inc) with a unique row proves
+    # the old TD25 inc column is gone (else _val would see 2 rows). USG labels gone too.
+    assert df[df.instrument.str.contains('USG')].empty
 
     # dropped: TC*, BLPG*, X-UK Cont P.
     assert df[df.instrument.str.startswith('TC')].empty
