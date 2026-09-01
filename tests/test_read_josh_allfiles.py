@@ -15,7 +15,8 @@ SCHEMA = ['source', 'periodType', 'date', 'instrument', 'period', 'uom', 'value'
 
 def test_all_files():
     files = sorted(os.path.basename(p) for p in glob.glob('data/josh/*.xlsx'))
-    assert len(files) == 6, f'expected 6 fixtures, found {files}'
+    # at least the 6 original fixtures; the scheduler accretes more over time
+    assert len(files) >= 6, f'expected >=6 fixtures, found {files}'
     for f in files:
         df = read_josh_file.main(f)
         assert list(df.columns) == SCHEMA, f'{f}: bad schema {list(df.columns)}'
