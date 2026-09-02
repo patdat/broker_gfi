@@ -42,6 +42,9 @@ def test_build_frame():
     # values are real: a known josh TD25 value shows up
     assert df[['TD7', 'TD25']].notna().any().all(), 'both columns should have values'
 
+    # MTD is excluded from the export
+    assert (df['periodType'] != 'MTD').all(), 'MTD should be dropped from cash_arb'
+
     print(f'test_build_frame OK ({len(df)} rows, '
           f'{df["date"].dt.date.nunique()} dates)')
 

@@ -27,6 +27,11 @@ INSTRUMENTS = ['TD7', 'TD25']
 INDEX_COLS = ['periodType', 'date', 'period', 'uom']
 OUT_COLS = INDEX_COLS + INSTRUMENTS  # source dropped; instrument pivoted away
 
+# periodTypes to exclude from the export. MTD (month-to-date) is xlsx-only — josh
+# uses BAL (balance-of-month) instead — so it only ever appears on pre-josh dates
+# and creates a boundary seam; drop it.
+DROP_PERIODTYPES = ['MTD']
+
 
 def _load_td(path):
     """Read a master and keep only the TD7/TD25 rows we pivot on."""
@@ -44,6 +49,7 @@ def build_frame():
     xlsx = xlsx[~xlsx['date'].isin(josh_dates)]
 
     combined = pd.concat([xlsx, josh], ignore_index=True)
+    combined = combined[~combined['periodType'].isin(DROP_PERIODTYPES)]
 
     pivoted = combined.pivot_table(
         index=INDEX_COLS, columns='instrument', values='value', aggfunc='first')
