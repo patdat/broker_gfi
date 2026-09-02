@@ -46,7 +46,11 @@ def test_curve_values():
     # the old TD25 inc column is gone (else _val would see 2 rows). USG labels gone too.
     assert df[df.instrument.str.contains('USG')].empty
 
-    # dropped: TC*, BLPG*, X-UK Cont P.
+    # TD7 is the relabeled 'X-UK Cont P.' column (correct flat-rate basis), NOT
+    # the dropped josh 'TD7' column; a unique row == 210 proves the swap
+    assert _val(df, 'TD7', 'M', 'WSC', '2026-08-01') == 210
+
+    # dropped: TC*, BLPG* (and the raw 'X-UK Cont P.' label, now surfaced as TD7)
     assert df[df.instrument.str.startswith('TC')].empty
     assert df[df.instrument.str.startswith('BLPG')].empty
     assert df[df.instrument.str.contains('UK')].empty
