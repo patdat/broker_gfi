@@ -24,6 +24,9 @@ def test_wsfr_and_bitr():
     assert _val(df, 'TD3C', 'WSFR', 'WSFR', '2026-08-01') == 20.21
     assert _val(df, 'TD25E', 'WSFR', 'WSFR', '2026-08-01') == 21.01
     assert _val(df, 'TD25', 'WSFR', 'WSFR', '2026-08-01') == 21.01
+    # TD7 = the relabeled 'X-UK Cont P.' column, whose WSFR is 10.63
+    # (the dropped josh 'TD7' column had 10.13)
+    assert _val(df, 'TD7', 'WSFR', 'WSFR', '2026-08-01') == 10.63
     # TD22 has no WSFR value -> no row
     assert df[(df.instrument == 'TD22') & (df.periodType == 'WSFR')].empty
 
