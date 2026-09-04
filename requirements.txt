@@ -7,4 +7,4 @@ openpyxl==3.1.5      # required by pandas.read_excel for the .xlsx pipeline
 pywin32==311         # Windows-only; provides win32com.client for local Outlook/MAPI access
 boto3==1.43.40       # AWS S3 uploads (utils/cloud.py)
 python-dotenv==1.2.2 # loads AWS credentials from .env
-pyarrow==25.0.1      # parquet engine for the cash-arb export (utils/cash_arb.py)
+pyarrow==25.0.1      # parquet engine for the 2D exports
