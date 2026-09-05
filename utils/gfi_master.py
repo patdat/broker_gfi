@@ -1,9 +1,9 @@
 """Build the combined, pivoted all-TD-route parquet.
 
-`gfi_master.parquet` is the full-route companion to `gfi_cash_arb.parquet`.
-It uses the same xlsx/Josh merge policy and 2D shape, but keeps every
-instrument whose name begins with ``TD`` and pivots each route into a value
-column.
+`gfi_master.parquet` is the broad-route companion to `gfi_cash_arb.parquet`.
+It uses the same xlsx/Josh merge policy and 2D shape, keeps instruments whose
+names begin with ``TD`` except explicitly excluded routes, and pivots each
+retained route into a value column.
 
 Josh takes precedence by report date: when Josh covers a date, all xlsx rows
 for that date are discarded.  This prevents the two broker layouts from being
@@ -24,17 +24,23 @@ CLOUD_NAME = 'gfi_master.parquet'
 
 INDEX_COLS = ['periodType', 'date', 'period', 'uom']
 DROP_PERIODTYPES = ['MTD']
+EXCLUDED_INSTRUMENTS = {'TD8', 'TD25E'}
 
 
 def _load_td(path):
     """Read a long-format master and keep instruments beginning with TD."""
     df = pd.read_csv(path, parse_dates=['date', 'period'])
     is_td = df['instrument'].astype('string').str.upper().str.startswith('TD', na=False)
-    return df[is_td].copy()
+    df = df[is_td].copy()
+    # TD3 is the XLSX feed's raw label for TD3C. Keep one canonical route name
+    # even when this builder is pointed at a pre-normalization master.
+    df['instrument'] = df['instrument'].replace({'TD3': 'TD3C'})
+    df = df[~df['instrument'].isin(EXCLUDED_INSTRUMENTS)]
+    return df
 
 
 def _route_sort_key(route):
-    """Sort route columns naturally (TD3, TD3C, TD7, ..., TD25E)."""
+    """Sort route columns naturally (TD3C, TD7, ..., TD25E)."""
     match = re.fullmatch(r'([^0-9]*)([0-9]+)(.*)', str(route))
     if match is None:
         return (str(route), -1, '')

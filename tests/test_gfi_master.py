@@ -33,8 +33,12 @@ def test_build_frame():
     assert int(df[routes].notna().sum().sum()) == len(combined)
     assert len(df) == len(combined.drop_duplicates(gfi_master.INDEX_COLS))
 
-    # The widest current feeds are represented, including source-specific routes.
-    assert {'TD3', 'TD3C', 'TD7', 'TD25', 'TD25E', 'TD28'} <= set(routes)
+    # TD3 is the XLSX alias for TD3C and must never become a second route column.
+    assert 'TD3C' in routes
+    assert 'TD3' not in routes
+    assert 'TD25E' not in routes
+    assert 'TD8' not in routes
+    assert {'TD7', 'TD25', 'TD28'} <= set(routes)
 
     # Josh wins on dates it covers.
     josh = gfi_master._load_td(gfi_master.JOSH_MASTER)

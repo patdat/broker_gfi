@@ -7,6 +7,12 @@ warnings.simplefilter("ignore")
 files = os.listdir('./data/xlsx')
 lookup = pd.read_csv('./lookup/periods.csv')
 
+
+def _normalize_route_names(routes):
+    """Return uppercase route names with the canonical TD3C alias."""
+    return routes.str.upper().replace({'TD3': 'TD3C'})
+
+
 def readFile(file):
     df = pd.read_excel('./data/xlsx/' + file,header=None)
     date_string = df.iloc[2,0]
@@ -28,7 +34,7 @@ def readFile(file):
     df[['period','uom']] = df['period'].str.split('_',expand=True)
     df['uom'] = df['uom'].str.upper()
 
-    df['route'] = df['route'].str.upper()
+    df['route'] = _normalize_route_names(df['route'])
     df = df[df['route'].str.contains('TD', na=False)]  # na=False drops blank/trailing rows
 
     df['value'] = np.where((df['route'] == 'TD22') & (df['period'] == 'BITR'),df['value']/1000000,df['value'])
