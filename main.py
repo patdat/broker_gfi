@@ -86,7 +86,6 @@ def mtdFromCsvMaster():
     if mtd.empty:
         return pd.DataFrame(columns=cols)
 
-    mtd['instrument'] = mtd['instrument'].replace({'TD3C': 'TD3'})  # xlsx names this route TD3
     mtd = mtd.rename(columns={'price': 'value'})
     # LSM for TD22 (÷1e6, matching the xlsx feed's LSM convention), WSC for the rest
     mtd['uom'] = np.where(mtd['instrument'] == 'TD22', 'LSM', 'WSC')
