@@ -1,6 +1,7 @@
 import os
 import json
 import datetime
+import tempfile
 
 STATE_PATH = './data/state.json'
 
@@ -25,10 +26,36 @@ def get_cursor(key):
         return None
 
 
+def _save(state):
+    folder = os.path.dirname(STATE_PATH) or '.'
+    os.makedirs(folder, exist_ok=True)
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', dir=folder, delete=False) as f:
+            temp_path = f.name
+            json.dump(state, f, indent=2)
+        os.replace(temp_path, STATE_PATH)
+    finally:
+        if temp_path is not None and os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
 def set_cursor(key, dt):
     """Persist `dt` (a naive-local datetime) as the cursor for `key`."""
     state = _load()
     state[key] = dt.replace(microsecond=0).isoformat()
-    os.makedirs(os.path.dirname(STATE_PATH) or '.', exist_ok=True)
-    with open(STATE_PATH, 'w') as f:
-        json.dump(state, f, indent=2)
+    _save(state)
+
+
+def get_pending_files(key):
+    """Saved reports not yet committed to a validated master."""
+    return _load().get(key + '_pending', [])
+
+
+def set_pending_files(key, files):
+    state = _load()
+    if files:
+        state[key + '_pending'] = sorted(set(files))
+    else:
+        state.pop(key + '_pending', None)
+    _save(state)

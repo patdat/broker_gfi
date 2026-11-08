@@ -13,7 +13,8 @@ from utils.read_josh_file import main as read_josh_file
 from utils.shorten_csv import processBroker
 from utils.cash_arb import build_cash_arb
 from utils.gfi_master import build_gfi_master
-from utils.state import get_cursor, set_cursor
+from utils.xlsx_units import align_td34_forwards, frames_equal, td34_forwards
+from utils.state import get_cursor, set_cursor, get_pending_files, set_pending_files
 
 K_DRIVE_DEST = r'K:\plm_prices'
 
@@ -97,13 +98,12 @@ def mtdFromCsvMaster():
 def xlsxDownloader(counter, force=False):
     since = None if force else get_cursor('GFI_xlsx')
     newFiles, latest = downloader_xlsx(counter, since)
-    if latest is not None:
-        set_cursor('GFI_xlsx', latest)  # advance pointer over everything we accounted for
-
-    newFiles = sorted(newFiles)
+    # A held publication must retry downloaded files, including amendments:
+    # Outlook's on-disk guard will not return those files again on a resend.
+    newFiles = sorted(set(newFiles) | set(get_pending_files('GFI_xlsx')))
+    if newFiles:
+        set_pending_files('GFI_xlsx', newFiles)
     masterFile = pd.read_csv('./data/GFI_xlsx.csv', parse_dates=['date','period'])
-    rowsBefore = len(masterFile)
-
     parts = [masterFile]
     if newFiles:
         print(f'XLSX: {len(newFiles)} new file(s): {newFiles}')
@@ -115,16 +115,31 @@ def xlsxDownloader(counter, force=False):
 
     df = pd.concat(parts)
     df = df.drop_duplicates(subset=['periodType', 'date', 'instrument', 'period'], keep='last')
-    newRows = len(df) > rowsBefore
+    if td34_forwards(df).any():
+        josh = pd.read_csv('./data/GFI_josh.csv', parse_dates=['date', 'period'])
+        aligned = align_td34_forwards(df, josh)
+        corrected = int((td34_forwards(df) & df['value'].ne(aligned['value'])).sum())
+        if corrected:
+            print(f'XLSX: aligned {corrected} TD34 forward quote(s) with same-date Josh units')
+        df = aligned
+    changed = not frames_equal(masterFile, df)
 
-    if not newRows and not force:
-        print('XLSX: nothing new - skipping upload')
+    if not changed and not force:
+        if newFiles:
+            set_pending_files('GFI_xlsx', [])
+        if latest is not None:
+            set_cursor('GFI_xlsx', latest)
+        print('XLSX: no changed quotes - skipping upload')
         return None
 
-    if newRows:
+    if changed:
         df.to_csv('./data/GFI_xlsx.csv', index=False)
     else:
-        print('XLSX: [FORCED] no new rows - re-publishing existing master')
+        print('XLSX: [FORCED] no changed quotes - re-publishing existing master')
+    if newFiles:
+        set_pending_files('GFI_xlsx', [])
+    if latest is not None:
+        set_cursor('GFI_xlsx', latest)
     processBroker(df, './data/', 'GFI_xlsx', './data/master/', 'BROKER/MASTER')
     copyToKDrive(['./data/GFI_xlsx.csv', './data/shortened/GFI_xlsx_last.csv'])
     return df
@@ -154,8 +169,6 @@ def joshDownloader(counter, force=False):
 
     newFiles = sorted(newFiles)
     masterFile = pd.read_csv('./data/GFI_josh.csv', parse_dates=['date', 'period'])
-    rowsBefore = len(masterFile)
-
     parts = [masterFile]
     if newFiles:
         print(f'JOSH: {len(newFiles)} new file(s): {newFiles}')
@@ -167,16 +180,16 @@ def joshDownloader(counter, force=False):
     df = pd.concat(parts)
     df = df.drop_duplicates(
         subset=['periodType', 'date', 'instrument', 'period', 'uom'], keep='last')
-    newRows = len(df) > rowsBefore
+    changed = not frames_equal(masterFile, df)
 
-    if not newRows and not force:
-        print('JOSH: nothing new - skipping upload')
+    if not changed and not force:
+        print('JOSH: no changed quotes - skipping upload')
         return None
 
-    if newRows:
+    if changed:
         df.to_csv('./data/GFI_josh.csv', index=False)
     else:
-        print('JOSH: [FORCED] no new rows - re-publishing existing master')
+        print('JOSH: [FORCED] no changed quotes - re-publishing existing master')
     processBroker(df, './data/', 'GFI_josh', './data/master/', 'BROKER/MASTER')
     copyToKDrive(['./data/GFI_josh.csv', './data/shortened/GFI_josh_last.csv'])
     return df
@@ -184,10 +197,12 @@ def joshDownloader(counter, force=False):
 
 def main(counter, force=False):
     print(f'Run condition (today > latest date in master): {runFunctionCheck}{" [FORCED]" if force else ""}')
-    if force or runFunctionCheck == True:
+    if force or runFunctionCheck == True or get_pending_files('GFI_xlsx'):
         csvCompiler(counter, force)
-        xlsxDownloader(counter, force)
+        # XLSX TD34 forwards consume the explicitly labelled same-day curve.
+        # Save Josh amendments before reconciling/publishing the legacy export.
         joshDownloader(counter, force)
+        xlsxDownloader(counter, force)
         # combined TD7/TD25 cash-arb parquet (josh wins by date); reads the
         # masters fresh, so it reflects whatever the three pipelines just wrote
         build_cash_arb()

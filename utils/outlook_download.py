@@ -13,8 +13,6 @@ ever written under a non-`YYYY-MM-DD` name."""
 import os
 import datetime
 
-import win32com.client
-
 from utils.report_date import report_datestr, is_amendment
 
 _OL_MAIL = 43  # olMail item class; skip calendar/report/other items in the root Inbox
@@ -108,6 +106,8 @@ def download_reports(subfolder, ext, attachment_match, dayStart, since=None, dat
                 break
 
     try:
+        import win32com.client
+
         outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
         for folder in _source_folders(outlook):
             try:

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A Windows-only ETL pipeline that ingests daily tanker freight broker quotes (GFI / Braemar) from a local Outlook inbox, normalizes them, appends to master CSVs, and publishes the results to AWS S3 (and, on the production box, a `K:` network drive). It powers freight rate data for crude trading. There is no build system or test suite — it is a small collection of pandas scripts driven by `main.py`, designed to be run on a schedule (e.g. hourly).
+A Windows-only ETL pipeline that ingests daily tanker freight broker quotes (GFI / Braemar) from a local Outlook inbox, normalizes them, appends to master CSVs, and publishes the results to AWS S3 (and, on the production box, a `K:` network drive). It powers freight rate data for crude trading. It is a small collection of pandas scripts driven by `main.py`, designed to be run on a schedule (e.g. hourly). Tests run with `python -m pytest -q` (install `pytest` separately); parsing, reconciliation and publication tests can run without Windows/Outlook, with cloud writes mocked.
 
 ## Running
 
@@ -14,7 +14,7 @@ python main.py --force         # ignore data/state.json (cursor) AND the once-pe
 python main.py --force --days 30   # same, but widen the look-back to 30 days (gap recovery after an outage)
 ```
 
-- **CLI flags** (`main.py`): `--force` bypasses the `state.json` cursor (`since=None`) and the once-per-day run gate; `--days N` sets the look-back window (default 5). `--force` still respects the on-disk guard, so it won't re-download dates already saved, but it **always re-publishes the current master** — S3 upload + K: copy run even when no new rows result (the master file itself is only rewritten to disk when there actually are new rows). A normal (non-force) run still skips the upload entirely when nothing changed.
+- **CLI flags** (`main.py`): `--force` bypasses the `state.json` cursor (`since=None`) and the once-per-day run gate; `--days N` sets the look-back window (default 5). `--force` still respects the on-disk guard, so it won't re-download dates already saved, but it **always re-publishes the current master** — S3 upload + K: copy run even when no new rows result. XLSX/Josh rewrite on any changed observation, including same-row-count amendments; CSV still uses row growth. A normal (non-force) run skips the upload entirely when nothing changed.
 - **Must run on Windows with Outlook installed and signed in** to the mailbox that receives the broker emails. The downloaders use `win32com.client` over MAPI and read the **`gfi` subfolder of the Inbox** (`GetDefaultFolder(6).Folders["gfi"]`) — broker emails are filed there, not the root Inbox. On any other environment the Outlook call fails (caught and logged) and no files are downloaded.
 - All paths are relative (`./data`, `./lookup`), so **always run from the repo root**.
 - **AWS credentials** for the S3 upload come from a local `.env` (see `.env.example`): `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_BUCKET`. `.env` is git-ignored — never commit it.
@@ -27,11 +27,11 @@ Runtime deps: `pandas`, `numpy`, `openpyxl`, `pywin32`, `boto3`, `python-dotenv`
 
 ## Architecture
 
-Three pipelines run per invocation — **CSV** (GFI format) and **XLSX** (Braemar format), which are near-identical, plus **JOSH** (Josh Smithson's "GFI FFA Curves" file), which shares the plumbing but has its own parser (see the JOSH subsection below). All are orchestrated in `main.py`. Built to be cheap on a schedule: a run with no new report makes one Outlook query and then does nothing (no downloads, no master rewrite, no upload).
+Three pipelines run per invocation — **CSV** (GFI format), **JOSH** (Josh Smithson's "GFI FFA Curves" file), then **XLSX** (Braemar format). Josh runs before XLSX because its explicitly labelled TD34 forwards validate the legacy export (see below). All are orchestrated in `main.py`. A run with no new or changed report skips master rewrites and uploads.
 
 1. **Download** (`utils/downloader_csv.py`, `utils/downloader_xlsx.py` — thin wrappers over the shared `utils/outlook_download.py`): read the `gfi` Inbox subfolder. Query only mail newer than the **cursor** (see below), or the last `dayStart` days when there is no cursor. **The report date is read from the xlsx's internal date cell (`utils/report_date.py`), never the email subject**, so both attachments in an email are named `<internal-date>.csv` / `.xlsx`. A date already on disk is skipped, **except** an amendment/correction (subject matches `correction|amendment`), which overwrites that date and re-compiles. **Nothing is written unless the name is a bare `YYYY-MM-DD`** (unparseable date → logged skip). CSV matches attachments starting `GFI Bra`; XLSX those starting `Braemar`. Returns `(new_files, latest_seen)`.
 2. **Parse** (`utils/read_csv_file.py`, `utils/read_xlsx_file.py`): reshape each raw file into long format (`melt`), keep only routes containing `TD` (dirty tanker routes; filtered with `na=False` so a blank/trailing row can't crash it), normalize the XLSX feed's raw `TD3` label to the canonical `TD3C`, and resolve period codes via the lookup (below).
-3. **Compile** (`csvCompiler` / `xlsxDownloader` in `main.py`): parse only the newly downloaded files, concat onto the existing master, **dedupe on `['periodType','date','instrument','period']` keeping the last row**, and rewrite the master. **If no new rows result, a normal run skips the rewrite, upload, and K: copy entirely** (change-aware). Under `--force`, the master is still not rewritten when there are no new rows, but the existing master is re-published to S3 and K: anyway.
+3. **Compile** (`csvCompiler` / `xlsxDownloader` in `main.py`): parse only the newly downloaded files, concat onto the existing master, **dedupe on `['periodType','date','instrument','period']` keeping the last row**, and rewrite the master. XLSX reconciles all saved TD34 forwards against Josh before publication and compares full observations, so amendments and historical unit repairs are saved even with no new rows. CSV still uses row growth. Unchanged masters skip rewrite/upload/K: copy unless `--force` requests republication.
 4. **Shorten + publish** (`utils/shorten_csv.py::processBroker`): write the most-recent-date (`_last`) and 30/60-day trailing windows to `./data/shortened/<name>_{last,30,60}.csv`, then upload the master and all three windows to `s3://<AWS_S3_BUCKET>/BROKER/MASTER/` via `utils/cloud.py`. Cloud errors are non-fatal (logged; pipeline continues).
 5. **K: export** (`main.py::copyToKDrive`): after a successful **xlsx** update, copy `GFI_xlsx.csv` and `GFI_xlsx_last.csv` to `K:\plm_prices`. Silently skipped if the drive isn't mounted (machine-specific sink); per-file copy errors are caught.
 6. **Logging** (`utils/logger.py::setup_logging`): every `python main.py` invocation tees stdout+stderr to `./logs/run_<YYYY-MM-DD_HHMMSS>.log`; folder auto-created.
@@ -56,6 +56,29 @@ A compact, pivoted TD7/TD25-only export for downstream arb work, rebuilt at the 
 
 ### All-route parquet (`utils/gfi_master.py` → `gfi_master.parquet`)
 The full 2D companion to the cash-arb export, rebuilt and uploaded at the end of every gated run by `build_gfi_master()`. It uses the same xlsx/Josh date-precedence rule, pivot key, `MTD` exclusion, local folder, and S3 prefix, but keeps instruments whose names begin with `TD` (except explicitly excluded `TD8` and `TD25E`) and makes each retained route a value column. The four identifier columns remain `periodType, date, period, uom`; route columns are dynamically derived and naturally sorted. `TD3C` is canonical in both feeds: the XLSX feed's raw `TD3` label is normalized during parsing, and the parquet builder also applies the alias defensively for older masters.
+
+### TD34 forward units in the legacy XLSX export
+
+Braemar's single unit heading per tenor column is unreliable for TD34: the
+2026-11-06 legacy export labelled Jan-27's `307.980718` Worldscale as `PMT`.
+`utils/xlsx_units.py` resolves **TD34 M/Q/A** values from the explicitly labelled
+Josh quote for the **same report date, period type, contract and requested unit**.
+This uses the source already preferred by `gfi_master.parquet`, retains the legacy
+one-unit-per-contract schema, and deliberately aligns even same-day price
+differences with Josh. It does not infer units from value size or substitute spot.
+BITR, MTD and all other routes keep their existing source behavior.
+
+The entire saved XLSX master is reconciled on each gated run, not only new rows.
+Missing, invalid or duplicate required Josh quotes stop XLSX publication before
+any master/window is written; a zero quote remains valid. Downloaded reports stay
+in `data/state.json` as `GFI_xlsx_pending` until their master is validated and
+saved. Pending files bypass the daily gate and are retried from disk, so the
+attachment on-disk guard cannot lose a held report/amendment. Josh amendments must
+be saved first, which is why it now runs before XLSX. For a local-only check use
+`python -m utils.xlsx_units`; `--apply` writes the repaired local master without
+uploading. Run `python main.py --force` on the Windows publisher to reconcile and
+republish all legacy windows. See [TD34 repair](docs/operations/td34-units.md) for
+verification and recovery; existing downstream caches still need refreshing.
 
 ### Incremental cursor (`data/state.json`)
 `utils/state.py` stores a per-pipeline high-water-mark (last processed email `ReceivedTime`) in `data/state.json` (git-ignored, self-healing). Each run asks Outlook only for mail newer than the cursor (minus a 1-day safety margin), so a quiet tick returns nothing and exits fast. The on-disk check and the "no new rows" guard are the correctness nets — the cursor only *narrows* the query and can never cause a report to be skipped.
