@@ -1,12 +1,18 @@
 import os
 import sys
+import shutil
+from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, os.getcwd())
 
 
-def test_seed_and_schema():
+def test_seed_and_schema(tmp_path, monkeypatch):
     import main
+    root = Path.cwd()
+    shutil.copytree(root / 'data/josh', tmp_path / 'data/josh')
+    shutil.copytree(root / 'lookup', tmp_path / 'lookup')
+    monkeypatch.chdir(tmp_path)
     df = main.seedJoshMaster()
     assert list(df.columns) == ['source', 'periodType', 'date', 'instrument', 'period', 'uom', 'value']
     assert len(df) > 0
@@ -19,7 +25,3 @@ def test_seed_and_schema():
     key = ['periodType', 'date', 'instrument', 'period', 'uom']
     assert not on_disk.duplicated(subset=key).any()
     print(f'test_seed_and_schema OK ({len(df)} rows)')
-
-
-if __name__ == '__main__':
-    test_seed_and_schema()
