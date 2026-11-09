@@ -5,9 +5,11 @@ It uses the same xlsx/Josh merge policy and 2D shape, keeps instruments whose
 names begin with ``TD`` except explicitly excluded routes, and pivots each
 retained route into a value column.
 
-Josh takes precedence by report date: when Josh covers a date, all xlsx rows
-for that date are discarded.  This prevents the two broker layouts from being
-mixed within a single daily curve.
+Josh takes precedence per route and report date: when Josh quotes a route on
+a date, every xlsx row for that route and date is discarded, so a single
+route's daily curve never mixes the two broker layouts.  Routes Josh does not
+quote on a date (e.g. ``TD15``, which only the xlsx feed carries) still come
+from xlsx.
 """
 
 import os
@@ -47,15 +49,23 @@ def _route_sort_key(route):
     return (match.group(1), int(match.group(2)), match.group(3))
 
 
+def _drop_josh_covered(xlsx, josh):
+    """Drop xlsx rows for each (date, route) that Josh also quotes.
+
+    A route's daily curve comes wholly from one feed; xlsx-only routes survive.
+    """
+    josh_keys = josh[['date', 'instrument']].drop_duplicates()
+    merged = xlsx.merge(josh_keys, on=['date', 'instrument'], how='left', indicator=True)
+    keep = (merged['_merge'] == 'left_only').to_numpy()
+    return xlsx[keep]
+
+
 def build_frame():
     """Combine xlsx + Josh and pivot every TD route into a value column."""
     xlsx = _load_td(XLSX_MASTER)
     josh = _load_td(JOSH_MASTER)
 
-    # Josh precedence by report date: a daily curve comes wholly from one feed.
-    josh_dates = set(josh['date'].unique())
-    xlsx = xlsx[~xlsx['date'].isin(josh_dates)]
-
+    xlsx = _drop_josh_covered(xlsx, josh)
     combined = pd.concat([xlsx, josh], ignore_index=True)
     combined = combined[~combined['periodType'].isin(DROP_PERIODTYPES)]
     routes = sorted(combined['instrument'].dropna().unique(), key=_route_sort_key)
