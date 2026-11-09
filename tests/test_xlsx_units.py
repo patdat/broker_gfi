@@ -1,4 +1,4 @@
-"""TD34 unit regression and publication checks; all writes stay in tmp_path."""
+"""TD15/TD34 unit regression and publication checks; all writes stay in tmp_path."""
 
 import numpy as np
 import pandas as pd
@@ -7,7 +7,7 @@ import pytest
 import main as pipeline
 from utils import read_xlsx_file, shorten_csv
 from utils.state import get_pending_files, get_cursor, set_cursor
-from utils.xlsx_units import align_td34_forwards, frames_equal
+from utils.xlsx_units import align_forwards, changed_by_route, frames_equal
 
 
 COLS = ['source', 'periodType', 'date', 'instrument', 'period', 'uom', 'value']
@@ -31,6 +31,8 @@ def november_quotes():
         ['GFI', 'BITR', '2026-11-06', 'TD34', '2026-11-01', 'WSC', 545.0],
         ['GFI', 'M', '2026-11-06', 'TD25', '2027-01-01', 'PMT', 66.0],
         ['GFI', 'MTD', '2026-11-06', 'TD34', '2026-11-01', 'WSC', 550.0],
+        ['GFI', 'M', '2026-11-06', 'TD15', '2027-01-01', 'PMT', 287.356322],
+        ['GFI', 'Q', '2026-11-06', 'TD15', '2027-01-01', 'PMT', 257.108288],
     ])
     josh = quotes([
         ['GFI', 'M', '2026-11-06', 'TD34', '2027-01-01', 'PMT', 57.5],
@@ -38,6 +40,10 @@ def november_quotes():
         ['GFI', 'Q', '2026-11-06', 'TD34', '2027-01-01', 'PMT', 41.5],
         ['GFI', 'Q', '2026-11-06', 'TD34', '2027-01-01', 'WSC', 222.28],
         ['GFI', 'M', '2026-11-06', 'TD34', '2026-12-01', 'WSC', 400.0],
+        ['GFI', 'M', '2026-11-06', 'TD15', '2027-01-01', 'PMT', 95.0],
+        ['GFI', 'M', '2026-11-06', 'TD15', '2027-01-01', 'WSC', 287.36],
+        ['GFI', 'Q', '2026-11-06', 'TD15', '2027-01-01', 'PMT', 85.0],
+        ['GFI', 'Q', '2026-11-06', 'TD15', '2027-01-01', 'WSC', 257.11],
     ])
     return xlsx, josh
 
@@ -45,12 +51,14 @@ def november_quotes():
 def test_november_units_and_scope(november_quotes):
     xlsx, josh = november_quotes
     original = xlsx.copy()
-    fixed = align_td34_forwards(xlsx, josh)
-    assert fixed['value'].tolist() == [57.5, 41.5, 400.0, 545.0, 66.0, 550.0]
+    fixed = align_forwards(xlsx, josh)
+    assert fixed['value'].tolist() == [57.5, 41.5, 400.0, 545.0, 66.0, 550.0, 95.0, 85.0]
+    assert changed_by_route(xlsx, fixed) == {'TD15': 2, 'TD34': 2}
     pd.testing.assert_frame_equal(fixed.drop(columns='value'), xlsx.drop(columns='value'))
     pd.testing.assert_frame_equal(xlsx, original)
-    pd.testing.assert_frame_equal(align_td34_forwards(fixed, josh), fixed)
+    pd.testing.assert_frame_equal(align_forwards(fixed, josh), fixed)
     assert fixed.iloc[0]['value'] / 18.67 * 100 == pytest.approx(307.98, abs=.005)
+    assert fixed.iloc[6]['value'] / 33.06 * 100 == pytest.approx(287.36, abs=.005)
 
 
 def test_header_parser_to_unit_resolution(monkeypatch, november_quotes):
@@ -65,7 +73,7 @@ def test_header_parser_to_unit_resolution(monkeypatch, november_quotes):
     ])
     monkeypatch.setattr(read_xlsx_file.pd, 'read_excel', lambda *a, **k: raw)
     parsed = read_xlsx_file.readFile('2026-11-06.xlsx')
-    fixed = align_td34_forwards(parsed, november_quotes[1])
+    fixed = align_forwards(parsed, november_quotes[1])
     forward = fixed[fixed.periodType.eq('M')].iloc[0]
     assert forward['period'] == pd.Timestamp('2027-01-01')
     assert forward['uom'] == 'PMT'
@@ -78,20 +86,27 @@ def test_invalid_reference_stops_repair(november_quotes, bad):
     josh['value'] = josh['value'].astype(object)
     josh.loc[0, 'value'] = bad
     with pytest.raises(ValueError, match='TD34 publication held'):
-        align_td34_forwards(xlsx, josh)
+        align_forwards(xlsx, josh)
 
 
 def test_missing_reference_does_not_borrow_another_day_or_unit(november_quotes):
     xlsx, josh = november_quotes
     josh.loc[0, 'date'] = pd.Timestamp('2026-11-05')
     with pytest.raises(ValueError, match='2026-11-06 M Jan-27 PMT'):
-        align_td34_forwards(xlsx, josh)
+        align_forwards(xlsx, josh)
+
+
+def test_each_route_needs_its_own_reference(november_quotes):
+    xlsx, josh = november_quotes
+    missing = josh.instrument.eq('TD15') & josh.periodType.eq('Q') & josh.uom.eq('PMT')
+    with pytest.raises(ValueError, match='TD15 publication held.*2026-11-06 Q Jan-27 PMT'):
+        align_forwards(xlsx, josh[~missing])
 
 
 def test_duplicate_reference_is_not_silently_selected(november_quotes):
     xlsx, josh = november_quotes
     with pytest.raises(pd.errors.MergeError):
-        align_td34_forwards(xlsx, pd.concat([josh, josh.iloc[[0]]]))
+        align_forwards(xlsx, pd.concat([josh, josh.iloc[[0]]]))
 
 
 def test_zero_and_annual_quote_use_explicit_unit(november_quotes):
@@ -100,18 +115,18 @@ def test_zero_and_annual_quote_use_explicit_unit(november_quotes):
     xlsx['periodType'] = 'A'
     josh = xlsx.copy()
     josh['value'] = 0.0
-    assert align_td34_forwards(xlsx, josh).iloc[0]['value'] == 0.0
+    assert align_forwards(xlsx, josh).iloc[0]['value'] == 0.0
 
 
-def test_no_td34_does_not_need_reference(november_quotes):
+def test_no_referenced_route_does_not_need_reference(november_quotes):
     xlsx = november_quotes[0].iloc[[4]].copy()
-    pd.testing.assert_frame_equal(align_td34_forwards(xlsx, pd.DataFrame()), xlsx)
+    pd.testing.assert_frame_equal(align_forwards(xlsx, pd.DataFrame()), xlsx)
 
 
 def test_other_routes_missing_prices_are_preserved(november_quotes):
     xlsx, josh = november_quotes
     xlsx.loc[xlsx.instrument.eq('TD25'), 'value'] = np.nan
-    fixed = align_td34_forwards(xlsx, josh)
+    fixed = align_forwards(xlsx, josh)
     assert pd.isna(fixed.loc[4, 'value'])
 
 
@@ -146,6 +161,8 @@ def test_saved_history_and_all_windows_are_repaired_without_new_rows(
         published = pd.read_csv(path, parse_dates=['date', 'period'])
         assert published.iloc[0]['value'] == 57.5
         assert published.iloc[1]['value'] == 41.5
+        assert published.iloc[6]['value'] == 95.0
+        assert published.iloc[7]['value'] == 85.0
         assert len(published) == len(xlsx)
     assert pipeline.xlsxDownloader(5) is None  # repeat is quiet/idempotent
     assert len(uploads) == 4
@@ -175,7 +192,8 @@ def test_josh_amendment_is_saved_at_same_row_count(tmp_path, monkeypatch, novemb
     result = pipeline.joshDownloader(5)
     assert len(result) == len(josh)
     saved = pd.read_csv('data/GFI_josh.csv', parse_dates=['date', 'period'])
-    assert saved[saved.uom.eq('PMT') & saved.periodType.eq('M')].iloc[0]['value'] == 58.0
+    amended = saved.instrument.eq('TD34') & saved.uom.eq('PMT') & saved.periodType.eq('M')
+    assert saved[amended]['value'].tolist() == [58.0]
     assert len(uploads) == 4
 
 
@@ -194,7 +212,7 @@ def test_held_report_retries_from_disk_without_another_download(
     xlsx, josh = november_quotes
     # Start with a valid previous publication, then receive either a new date
     # or a same-date amendment whose matching Josh quote is temporarily absent.
-    prior = align_td34_forwards(xlsx, josh)
+    prior = align_forwards(xlsx, josh)
     uploads = local_pipeline(tmp_path, monkeypatch, prior, josh)
     incoming = xlsx.iloc[[0]].copy()
     if not amendment:

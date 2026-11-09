@@ -8,7 +8,7 @@ from utils import read_josh_file
 
 PERIODTYPES = {'M', 'Q', 'A', 'BAL', 'BITR', 'WSFR'}
 UOMS = {'WSC', 'PMT', 'LSM', 'WSFR'}
-KEEP = {'TD3C', 'TD20', 'TD7', 'TD8', 'TD19', 'TD22', 'TD25', 'TD28', 'TD25E', 'TD34'}
+KEEP = {'TD3C', 'TD20', 'TD7', 'TD8', 'TD19', 'TD22', 'TD25', 'TD28', 'TD25E', 'TD34', 'TD15'}
 SCHEMA = ['source', 'periodType', 'date', 'instrument', 'period', 'uom', 'value']
 
 

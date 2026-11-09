@@ -13,7 +13,7 @@ from utils.read_josh_file import main as read_josh_file
 from utils.shorten_csv import processBroker
 from utils.cash_arb import build_cash_arb
 from utils.gfi_master import build_gfi_master
-from utils.xlsx_units import align_td34_forwards, frames_equal, td34_forwards
+from utils.xlsx_units import align_forwards, changed_by_route, frames_equal, referenced_forwards
 from utils.state import get_cursor, set_cursor, get_pending_files, set_pending_files
 
 K_DRIVE_DEST = r'K:\plm_prices'
@@ -115,12 +115,11 @@ def xlsxDownloader(counter, force=False):
 
     df = pd.concat(parts)
     df = df.drop_duplicates(subset=['periodType', 'date', 'instrument', 'period'], keep='last')
-    if td34_forwards(df).any():
+    if referenced_forwards(df).any():
         josh = pd.read_csv('./data/GFI_josh.csv', parse_dates=['date', 'period'])
-        aligned = align_td34_forwards(df, josh)
-        corrected = int((td34_forwards(df) & df['value'].ne(aligned['value'])).sum())
-        if corrected:
-            print(f'XLSX: aligned {corrected} TD34 forward quote(s) with same-date Josh units')
+        aligned = align_forwards(df, josh)
+        for route, corrected in changed_by_route(df, aligned).items():
+            print(f'XLSX: aligned {corrected} {route} forward quote(s) with same-date Josh units')
         df = aligned
     changed = not frames_equal(masterFile, df)
 
@@ -199,7 +198,7 @@ def main(counter, force=False):
     print(f'Run condition (today > latest date in master): {runFunctionCheck}{" [FORCED]" if force else ""}')
     if force or runFunctionCheck == True or get_pending_files('GFI_xlsx'):
         csvCompiler(counter, force)
-        # XLSX TD34 forwards consume the explicitly labelled same-day curve.
+        # XLSX TD15/TD34 forwards consume the explicitly labelled same-day curve.
         # Save Josh amendments before reconciling/publishing the legacy export.
         joshDownloader(counter, force)
         xlsxDownloader(counter, force)
