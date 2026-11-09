@@ -40,24 +40,29 @@ def test_build_frame():
     assert 'TD8' not in routes
     assert {'TD7', 'TD25', 'TD28'} <= set(routes)
 
-    # Routes Josh never quotes (TD15) still come from the xlsx feed.
-    assert 'TD15' in routes
-    xlsx = gfi_master._load_td(gfi_master.XLSX_MASTER)
-    xrow = xlsx[(xlsx['instrument'] == 'TD15') & (xlsx['periodType'] == 'M')
-                ].sort_values(['date', 'period']).iloc[-1]
-    got = df[(df['date'] == xrow['date']) & (df['period'] == xrow['period'])
-             & (df['periodType'] == xrow['periodType']) & (df['uom'] == xrow['uom'])]
-    assert len(got) == 1
-    assert float(got.iloc[0]['TD15']) == float(xrow['value'])
-
-    # Josh wins for the routes it quotes on the dates it covers.
+    # Josh wins for the routes it quotes on the dates it covers, including
+    # TD15, which the xlsx feed added on 2026-10-07 and Josh quotes since 09-14.
     josh = gfi_master._load_td(gfi_master.JOSH_MASTER)
-    jrow = josh[(josh['instrument'] == 'TD7') & (josh['periodType'] == 'M')
-                & (josh['uom'] == 'WSC')].sort_values(['date', 'period']).iloc[-1]
-    got = df[(df['date'] == jrow['date']) & (df['period'] == jrow['period'])
-             & (df['periodType'] == jrow['periodType']) & (df['uom'] == jrow['uom'])]
-    assert len(got) == 1
-    assert float(got.iloc[0]['TD7']) == float(jrow['value'])
+    for route in ['TD7', 'TD15']:
+        assert route in routes
+        jrow = josh[(josh['instrument'] == route) & (josh['periodType'] == 'M')
+                    & (josh['uom'] == 'WSC')].sort_values(['date', 'period']).iloc[-1]
+        got = df[(df['date'] == jrow['date']) & (df['period'] == jrow['period'])
+                 & (df['periodType'] == jrow['periodType']) & (df['uom'] == jrow['uom'])]
+        assert len(got) == 1
+        assert float(got.iloc[0][route]) == float(jrow['value'])
+
+
+def test_xlsx_only_route_survives_a_josh_date():
+    # Precedence is per (date, route): a route Josh does not quote keeps its
+    # xlsx curve even on a date Josh covers, while a quoted route is replaced.
+    cols = ['periodType', 'date', 'instrument', 'period', 'uom', 'value']
+    day, contract = pd.Timestamp('2026-11-06'), pd.Timestamp('2027-01-01')
+    xlsx = pd.DataFrame([['M', day, 'TD15', contract, 'PMT', 95.0],
+                         ['M', day, 'TD7', contract, 'WSC', 120.0]], columns=cols)
+    josh = pd.DataFrame([['M', day, 'TD7', contract, 'WSC', 121.0]], columns=cols)
+    kept = gfi_master._drop_josh_covered(xlsx, josh)
+    assert kept['instrument'].tolist() == ['TD15']
 
 
 def test_build_gfi_master_writes_parquet(tmp_path, monkeypatch):
