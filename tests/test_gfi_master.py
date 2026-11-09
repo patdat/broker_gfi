@@ -12,7 +12,7 @@ from utils import gfi_master
 def _combined_source_rows():
     xlsx = gfi_master._load_td(gfi_master.XLSX_MASTER)
     josh = gfi_master._load_td(gfi_master.JOSH_MASTER)
-    xlsx = xlsx[~xlsx['date'].isin(set(josh['date'].unique()))]
+    xlsx = gfi_master._drop_josh_covered(xlsx, josh)
     combined = pd.concat([xlsx, josh], ignore_index=True)
     return combined[~combined['periodType'].isin(gfi_master.DROP_PERIODTYPES)]
 
@@ -40,7 +40,17 @@ def test_build_frame():
     assert 'TD8' not in routes
     assert {'TD7', 'TD25', 'TD28'} <= set(routes)
 
-    # Josh wins on dates it covers.
+    # Routes Josh never quotes (TD15) still come from the xlsx feed.
+    assert 'TD15' in routes
+    xlsx = gfi_master._load_td(gfi_master.XLSX_MASTER)
+    xrow = xlsx[(xlsx['instrument'] == 'TD15') & (xlsx['periodType'] == 'M')
+                ].sort_values(['date', 'period']).iloc[-1]
+    got = df[(df['date'] == xrow['date']) & (df['period'] == xrow['period'])
+             & (df['periodType'] == xrow['periodType']) & (df['uom'] == xrow['uom'])]
+    assert len(got) == 1
+    assert float(got.iloc[0]['TD15']) == float(xrow['value'])
+
+    # Josh wins for the routes it quotes on the dates it covers.
     josh = gfi_master._load_td(gfi_master.JOSH_MASTER)
     jrow = josh[(josh['instrument'] == 'TD7') & (josh['periodType'] == 'M')
                 & (josh['uom'] == 'WSC')].sort_values(['date', 'period']).iloc[-1]
