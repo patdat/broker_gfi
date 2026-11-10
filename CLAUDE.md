@@ -27,11 +27,11 @@ Runtime deps: `pandas`, `numpy`, `openpyxl`, `pywin32`, `boto3`, `python-dotenv`
 
 ## Architecture
 
-Three pipelines run per invocation — **CSV** (GFI format), **JOSH** (Josh Smithson's "GFI FFA Curves" file), then **XLSX** (Braemar format). Josh runs before XLSX because its explicitly labelled TD15/TD34 forwards validate the legacy export (see below). All are orchestrated in `main.py`. A run with no new or changed report skips master rewrites and uploads.
+Three pipelines run per invocation — **CSV** (GFI format), **JOSH** (Josh Smithson's "GFI FFA Curves" file), then **XLSX** (Braemar format). Josh runs before XLSX because its explicitly labelled TD15/TD34/TD25/TD3C forwards validate the legacy export (see below). All are orchestrated in `main.py`. A run with no new or changed report skips master rewrites and uploads.
 
 1. **Download** (`utils/downloader_csv.py`, `utils/downloader_xlsx.py` — thin wrappers over the shared `utils/outlook_download.py`): read the `gfi` Inbox subfolder. Query only mail newer than the **cursor** (see below), or the last `dayStart` days when there is no cursor. **The report date is read from the xlsx's internal date cell (`utils/report_date.py`), never the email subject**, so both attachments in an email are named `<internal-date>.csv` / `.xlsx`. A date already on disk is skipped, **except** an amendment/correction (subject matches `correction|amendment`), which overwrites that date and re-compiles. **Nothing is written unless the name is a bare `YYYY-MM-DD`** (unparseable date → logged skip). CSV matches attachments starting `GFI Bra`; XLSX those starting `Braemar`. Returns `(new_files, latest_seen)`.
 2. **Parse** (`utils/read_csv_file.py`, `utils/read_xlsx_file.py`): reshape each raw file into long format (`melt`), keep only routes containing `TD` (dirty tanker routes; filtered with `na=False` so a blank/trailing row can't crash it), normalize the XLSX feed's raw `TD3` label to the canonical `TD3C`, and resolve period codes via the lookup (below).
-3. **Compile** (`csvCompiler` / `xlsxDownloader` in `main.py`): parse only the newly downloaded files, concat onto the existing master, **dedupe on `['periodType','date','instrument','period']` keeping the last row**, and rewrite the master. XLSX reconciles all saved TD15/TD34 forwards against Josh before publication and compares full observations, so amendments and historical unit repairs are saved even with no new rows. CSV still uses row growth. Unchanged masters skip rewrite/upload/K: copy unless `--force` requests republication.
+3. **Compile** (`csvCompiler` / `xlsxDownloader` in `main.py`): parse only the newly downloaded files, concat onto the existing master, **dedupe on `['periodType','date','instrument','period']` keeping the last row**, and rewrite the master. XLSX reconciles all saved TD15/TD34 forwards (and TD25/TD3C from 2026-08-10) against Josh before publication and compares full observations, so amendments and historical unit repairs are saved even with no new rows. CSV still uses row growth. Unchanged masters skip rewrite/upload/K: copy unless `--force` requests republication.
 4. **Shorten + publish** (`utils/shorten_csv.py::processBroker`): write the most-recent-date (`_last`) and 30/60-day trailing windows to `./data/shortened/<name>_{last,30,60}.csv`, then upload the master and all three windows to `s3://<AWS_S3_BUCKET>/BROKER/MASTER/` via `utils/cloud.py`. Cloud errors are non-fatal (logged; pipeline continues).
 5. **K: export** (`main.py::copyToKDrive`): after a successful **xlsx** update, copy `GFI_xlsx.csv` and `GFI_xlsx_last.csv` to `K:\plm_prices`. Silently skipped if the drive isn't mounted (machine-specific sink); per-file copy errors are caught.
 6. **Logging** (`utils/logger.py::setup_logging`): every `python main.py` invocation tees stdout+stderr to `./logs/run_<YYYY-MM-DD_HHMMSS>.log`; folder auto-created.
@@ -57,13 +57,14 @@ A compact, pivoted TD7/TD25-only export for downstream arb work, rebuilt at the 
 ### All-route parquet (`utils/gfi_master.py` → `gfi_master.parquet`)
 The full 2D companion to the cash-arb export, rebuilt and uploaded at the end of every gated run by `build_gfi_master()`. It uses the same pivot key, `MTD` exclusion, local folder, and S3 prefix, but keeps instruments whose names begin with `TD` (except explicitly excluded `TD8` and `TD25E`) and makes each retained route a value column. **Josh precedence is per route and date** (unlike cash-arb's whole-date rule): an xlsx row is dropped only when Josh quotes that same route on that date, so a route's daily curve never mixes feeds while xlsx-only routes survive. That rule was introduced for **`TD15`**: the xlsx feed added it (with `TD34`) from **2026-10-07**, Josh did not yet map it, and every such date is a Josh date, so the old whole-date rule silently discarded it. Josh now carries `TD15` too (since 2026-11-09 in the lookup, backfilled to 2026-09-14), so the parquet's TD15 curve comes from Josh; the per-route rule still protects any future xlsx-only route. The four identifier columns remain `periodType, date, period, uom`; route columns are dynamically derived and naturally sorted. `TD3C` is canonical in both feeds: the XLSX feed's raw `TD3` label is normalized during parsing, and the parquet builder also applies the alias defensively for older masters.
 
-### TD15/TD34 forward units in the legacy XLSX export
+### TD15/TD34/TD25/TD3C forwards in the legacy XLSX export
 
 Braemar's single unit heading per tenor column is unreliable for TD34 and TD15:
 the 2026-11-06 legacy export labelled TD34 Jan-27's `307.980718` and TD15
 Jan-27's `287.356322` Worldscale as `PMT` (TD15 since 2026-11-02).
 `utils/xlsx_units.py` resolves **M/Q/A** values of the routes in its `ROUTES`
-tuple (`TD15`, `TD34`) from the explicitly labelled Josh quote for the **same report date, period type, contract and requested unit**.
+dict (`TD15`, `TD34` on every date; `TD25`, `TD3C` from their reviewed start
+`2026-08-10`, Josh's first curve, keeping older xlsx values) from the explicitly labelled Josh quote for the **same report date, period type, contract and requested unit**.
 This uses the source already preferred by `gfi_master.parquet`, retains the legacy
 one-unit-per-contract schema, and deliberately aligns even same-day price
 differences with Josh. It does not infer units from value size or substitute spot.
@@ -81,7 +82,14 @@ uploading. Run `python main.py --force` on the Windows publisher to reconcile an
 republish all legacy windows. See [unit repair](docs/operations/xlsx-forward-units.md)
 for verification and recovery; existing downstream caches still need refreshing. A
 route added to `ROUTES` must be mapped in `lookup/josh_instruments.csv` and quoted by
-Josh on every date the xlsx quotes it, or publication is held.
+Josh on every date the xlsx quotes it from its start date, or publication is held.
+TD25 was added because Braemar froze its Nov/Dec-26 front at 765/670 WS (2026-10-29
+to 11-05) and repeats the quarter in each month; TD3C so history matches the live
+Josh curve. `JOSH_EXCLUSIONS` lists reviewed Josh bad prints whose xlsx value is kept
+(2026-11-04 TD3C M Dec-26, Josh WS 90.5 vs Braemar 850). **Never add `TD7`**: Josh's
+TD7 is `X-UK Cont P.` on another Worldscale basis. TD25 before 2026-08-10 (quarter-
+broadcast months, the frozen Jan–Feb 2026 front) has no independent source and stays
+as Braemar published it.
 
 ### Incremental cursor (`data/state.json`)
 `utils/state.py` stores a per-pipeline high-water-mark (last processed email `ReceivedTime`) in `data/state.json` (git-ignored, self-healing). Each run asks Outlook only for mail newer than the cursor (minus a 1-day safety margin), so a quiet tick returns nothing and exits fast. The on-disk check and the "no new rows" guard are the correctness nets — the cursor only *narrows* the query and can never cause a report to be skipped.

@@ -1,4 +1,4 @@
-"""Resolve TD15/TD34 forwards from the explicitly unit-labelled Josh curve.
+"""Resolve TD15/TD34/TD25/TD3C forwards from the explicitly unit-labelled Josh curve.
 
 The Braemar XLSX has one unit heading per tenor column. Some TD15 and TD34
 cells contain Worldscale under a $/Tonne heading (Jan-27 and Q1-27 on both
@@ -6,6 +6,13 @@ routes from 2026-11-02). The heading alone cannot establish the cell's actual
 unit. Use the same-report-date Josh quote in the requested unit, as the
 all-route master already does. Never guess units from magnitude or borrow
 another day.
+
+TD25 and TD3C have xlsx history before Josh quoted them, so they are aligned
+only from a reviewed start date (Josh's first curve, 2026-08-10). Before it the
+xlsx value stands. The xlsx TD25 front was frozen (Nov/Dec-26 765/670 from
+2026-10-29 to 11-05) and its 2027 months repeated the quarter; Josh's curve
+replaces both. TD7 is not aligned: Josh's TD7 is X-UK Cont on another
+Worldscale basis.
 """
 
 import numpy as np
@@ -13,20 +20,40 @@ import pandas as pd
 
 
 QUOTE_KEY = ['date', 'instrument', 'periodType', 'period', 'uom']
-# Routes whose legacy forwards are taken from Josh. Every route here must be
-# mapped in lookup/josh_instruments.csv, or the publication is held.
-ROUTES = ('TD15', 'TD34')
+# Routes whose legacy forwards are taken from Josh, with the first report date
+# to align (None = all dates). Every route here must be mapped in
+# lookup/josh_instruments.csv and quoted by Josh on every xlsx date from its
+# start, or the publication is held.
+ROUTES = {
+    'TD15': None,
+    'TD34': None,
+    'TD25': pd.Timestamp('2026-08-10'),
+    'TD3C': pd.Timestamp('2026-08-10'),
+}
+# Reviewed Josh bad prints (date, route, period type, contract): the xlsx value
+# is kept, in every unit. 2026-11-04 TD3C Dec-26 printed WS 90.5 / $18.29
+# between 1015 (11-03) and 910 (11-05); Braemar had 850.
+JOSH_EXCLUSIONS = (
+    ('2026-11-04', 'TD3C', 'M', '2026-12-01'),
+)
 
 
 def referenced_forwards(frame):
-    return frame['instrument'].isin(ROUTES) & frame['periodType'].isin(['M', 'Q', 'A'])
+    selected = frame['instrument'].isin(ROUTES) & frame['periodType'].isin(['M', 'Q', 'A'])
+    for route, since in ROUTES.items():
+        if since is not None:
+            selected &= ~(frame['instrument'].eq(route) & frame['date'].lt(since))
+    for date, route, period_type, period in JOSH_EXCLUSIONS:
+        selected &= ~(frame['date'].eq(pd.Timestamp(date)) & frame['instrument'].eq(route)
+                      & frame['periodType'].eq(period_type) & frame['period'].eq(pd.Timestamp(period)))
+    return selected
 
 
 def align_forwards(xlsx, josh):
-    """Preserve the legacy schema/units, taking TD15/TD34 forwards from Josh.
+    """Preserve the legacy schema/units, taking ROUTES forwards from Josh.
 
-    Only existing XLSX forward keys are selected; BITR, MTD and other routes
-    remain untouched. Missing, duplicate or invalid reference quotes stop the
+    Only existing XLSX forward keys from each route's start date are selected;
+    BITR, MTD, other routes and JOSH_EXCLUSIONS remain untouched. Missing, duplicate or invalid reference quotes stop the
     publication before its master/windows are written. An observed zero is
     valid. Applying this to the whole master also repairs saved history.
     """
@@ -104,7 +131,7 @@ if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser(
-        description='Check/repair TD15/TD34 units in the local XLSX master')
+        description='Check/repair TD15/TD34/TD25/TD3C forwards in the local XLSX master')
     parser.add_argument('--apply', action='store_true', help='write the validated local repair (no upload)')
     args = parser.parse_args()
     before, after = repair_master()

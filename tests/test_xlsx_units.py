@@ -1,4 +1,4 @@
-"""TD15/TD34 unit regression and publication checks; all writes stay in tmp_path."""
+"""TD15/TD34/TD25/TD3C forward regression and publication checks; all writes stay in tmp_path."""
 
 import numpy as np
 import pandas as pd
@@ -29,7 +29,7 @@ def november_quotes():
         ['GFI', 'Q', '2026-11-06', 'TD34', '2027-01-01', 'PMT', 222.281735],
         ['GFI', 'M', '2026-11-06', 'TD34', '2026-12-01', 'WSC', 400.0],
         ['GFI', 'BITR', '2026-11-06', 'TD34', '2026-11-01', 'WSC', 545.0],
-        ['GFI', 'M', '2026-11-06', 'TD25', '2027-01-01', 'PMT', 66.0],
+        ['GFI', 'M', '2026-11-06', 'TD7', '2027-01-01', 'PMT', 66.0],
         ['GFI', 'MTD', '2026-11-06', 'TD34', '2026-11-01', 'WSC', 550.0],
         ['GFI', 'M', '2026-11-06', 'TD15', '2027-01-01', 'PMT', 287.356322],
         ['GFI', 'Q', '2026-11-06', 'TD15', '2027-01-01', 'PMT', 257.108288],
@@ -59,6 +59,76 @@ def test_november_units_and_scope(november_quotes):
     pd.testing.assert_frame_equal(align_forwards(fixed, josh), fixed)
     assert fixed.iloc[0]['value'] / 18.67 * 100 == pytest.approx(307.98, abs=.005)
     assert fixed.iloc[6]['value'] / 33.06 * 100 == pytest.approx(287.36, abs=.005)
+
+
+def test_td25_forwards_follow_josh_from_its_first_curve():
+    # Braemar froze TD25 Nov/Dec-26 at 765/670 (10-29..11-05) and repeated
+    # Q1-27 in each 2027 month; Josh only quotes TD25 from 2026-08-10.
+    xlsx = quotes([
+        ['GFI', 'M', '2026-11-05', 'TD25', '2026-11-01', 'WSC', 765.0],
+        ['GFI', 'M', '2026-11-05', 'TD25', '2026-12-01', 'WSC', 670.0],
+        ['GFI', 'M', '2026-11-02', 'TD25', '2027-01-01', 'PMT', 79.5],
+        ['GFI', 'M', '2026-11-02', 'TD25', '2027-02-01', 'PMT', 79.5],
+        ['GFI', 'M', '2026-11-02', 'TD25', '2027-03-01', 'PMT', 79.5],
+        ['GFI', 'Q', '2026-11-02', 'TD25', '2027-01-01', 'PMT', 79.5],
+        ['GFI', 'M', '2026-11-06', 'TD25', '2026-11-01', 'WSC', 438.0],
+        ['GFI', 'M', '2026-08-07', 'TD25', '2026-10-01', 'WSC', 260.0],
+    ])
+    josh = quotes([
+        ['GFI', 'M', '2026-11-05', 'TD25', '2026-11-01', 'WSC', 400.0],
+        ['GFI', 'M', '2026-11-05', 'TD25', '2026-12-01', 'WSC', 375.0],
+        ['GFI', 'M', '2026-11-02', 'TD25', '2027-01-01', 'PMT', 92.5],
+        ['GFI', 'M', '2026-11-02', 'TD25', '2027-02-01', 'PMT', 77.0],
+        ['GFI', 'M', '2026-11-02', 'TD25', '2027-03-01', 'PMT', 69.0],
+        ['GFI', 'Q', '2026-11-02', 'TD25', '2027-01-01', 'PMT', 79.5],
+        ['GFI', 'M', '2026-11-06', 'TD25', '2026-11-01', 'WSC', 447.1],
+    ])
+    fixed = align_forwards(xlsx, josh)
+    assert fixed['value'].tolist() == [400.0, 375.0, 92.5, 77.0, 69.0, 79.5, 447.1, 260.0]
+    assert changed_by_route(xlsx, fixed) == {'TD25': 6}
+
+
+def test_td25_missing_josh_after_start_holds_publication():
+    xlsx = quotes([['GFI', 'M', '2026-11-05', 'TD25', '2026-11-01', 'WSC', 765.0]])
+    josh = quotes([['GFI', 'M', '2026-11-04', 'TD25', '2026-11-01', 'WSC', 505.0]])
+    with pytest.raises(ValueError, match='TD25 publication held'):
+        align_forwards(xlsx, josh)
+
+
+def test_td3c_forwards_follow_josh():
+    xlsx = quotes([
+        ['GFI', 'M', '2026-10-22', 'TD3C', '2026-11-01', 'WSC', 1080.0],
+        ['GFI', 'M', '2026-08-07', 'TD3C', '2026-09-01', 'WSC', 600.0],
+    ])
+    josh = quotes([['GFI', 'M', '2026-10-22', 'TD3C', '2026-11-01', 'WSC', 1070.0]])
+    fixed = align_forwards(xlsx, josh)
+    assert fixed['value'].tolist() == [1070.0, 600.0]
+    assert changed_by_route(xlsx, fixed) == {'TD3C': 1}
+
+
+def test_td3c_reviewed_bad_josh_print_keeps_xlsx():
+    # Josh 2026-11-04 TD3C Dec-26 printed WS 90.5 ($18.29); keep Braemar's 850
+    # while the rest of that day's curve still follows Josh.
+    xlsx = quotes([
+        ['GFI', 'M', '2026-11-04', 'TD3C', '2026-12-01', 'WSC', 850.0],
+        ['GFI', 'M', '2026-11-04', 'TD3C', '2027-01-01', 'PMT', 110.0],
+        ['GFI', 'M', '2026-11-05', 'TD3C', '2026-12-01', 'WSC', 900.0],
+    ])
+    josh = quotes([
+        ['GFI', 'M', '2026-11-04', 'TD3C', '2026-12-01', 'WSC', 90.5],
+        ['GFI', 'M', '2026-11-04', 'TD3C', '2026-12-01', 'PMT', 18.29],
+        ['GFI', 'M', '2026-11-04', 'TD3C', '2027-01-01', 'PMT', 130.0],
+        ['GFI', 'M', '2026-11-05', 'TD3C', '2026-12-01', 'WSC', 910.0],
+    ])
+    fixed = align_forwards(xlsx, josh)
+    assert fixed['value'].tolist() == [850.0, 130.0, 910.0]
+    assert changed_by_route(xlsx, fixed) == {'TD3C': 2}
+
+
+def test_td7_is_not_aligned_to_josh_x_uk_basis():
+    xlsx = quotes([['GFI', 'M', '2026-11-05', 'TD7', '2026-12-01', 'WSC', 150.0]])
+    josh = quotes([['GFI', 'M', '2026-11-05', 'TD7', '2026-12-01', 'WSC', 140.0]])
+    pd.testing.assert_frame_equal(align_forwards(xlsx, josh), xlsx)
 
 
 def test_header_parser_to_unit_resolution(monkeypatch, november_quotes):
@@ -125,7 +195,7 @@ def test_no_referenced_route_does_not_need_reference(november_quotes):
 
 def test_other_routes_missing_prices_are_preserved(november_quotes):
     xlsx, josh = november_quotes
-    xlsx.loc[xlsx.instrument.eq('TD25'), 'value'] = np.nan
+    xlsx.loc[xlsx.instrument.eq('TD7'), 'value'] = np.nan
     fixed = align_forwards(xlsx, josh)
     assert pd.isna(fixed.loc[4, 'value'])
 
