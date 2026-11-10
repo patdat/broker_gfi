@@ -44,6 +44,12 @@ again from disk on retry, including amendments. The queue is cleared only
 after a validated master is saved (or confirmed unchanged). Cursor and queue
 updates replace the state file atomically.
 
+Change detection compares keys and units exactly and values within a `1e-12`
+relative tolerance. The TD22 MTD carry-over is recomputed each run as price/1e6
+and can differ in its last bit from the value parsed back from the saved CSV.
+An exact comparison treated that as a changed quote, so every idle run rewrote
+and re-uploaded the legacy files (2026-11-09 08:30 to 2026-11-10).
+
 ## Apply on the Windows publisher
 
 Update the code on the native publisher, preserving its newer data files,

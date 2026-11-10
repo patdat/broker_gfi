@@ -267,3 +267,34 @@ def test_change_detection_includes_units_and_ignores_order(november_quotes):
     changed = xlsx.copy()
     changed.loc[0, 'uom'] = 'WSC'
     assert not frames_equal(xlsx, changed)
+    assert not frames_equal(xlsx, xlsx.iloc[1:])
+
+
+def test_change_detection_ignores_last_bit_float_noise(november_quotes):
+    # The saved CSV can parse back one bit away from the recomputed TD22 MTD
+    # (price / 1e6); that is not a changed quote, but a real move still is.
+    xlsx = november_quotes[0]
+    noisy = xlsx.copy()
+    noisy['value'] = np.nextafter(noisy['value'], np.inf)
+    assert not noisy['value'].equals(xlsx['value'])
+    assert frames_equal(xlsx, noisy)
+    moved = xlsx.copy()
+    moved.loc[0, 'value'] += 0.01
+    assert not frames_equal(xlsx, moved)
+    missing = xlsx.copy()
+    missing.loc[0, 'value'] = np.nan
+    assert not frames_equal(xlsx, missing)
+    assert frames_equal(missing, missing.copy())
+
+
+def test_idle_run_with_mtd_float_noise_does_not_republish(tmp_path, monkeypatch, november_quotes):
+    xlsx, josh = november_quotes
+    xlsx = align_forwards(xlsx, josh)
+    uploads = local_pipeline(tmp_path, monkeypatch, xlsx, josh)
+    mtd = xlsx[xlsx.periodType.eq('MTD')].copy()
+    mtd['value'] = np.nextafter(mtd['value'], np.inf)
+    monkeypatch.setattr(pipeline, 'mtdFromCsvMaster', lambda: mtd)
+    before = (tmp_path / 'data/GFI_xlsx.csv').read_bytes()
+    assert pipeline.xlsxDownloader(5) is None
+    assert not uploads
+    assert (tmp_path / 'data/GFI_xlsx.csv').read_bytes() == before
