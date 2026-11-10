@@ -60,10 +60,29 @@ def align_forwards(xlsx, josh):
     return result
 
 
+# Relative tolerance for "the same quote". A value recomputed in memory (the
+# TD22 MTD carry-over divides by 1e6) can differ in its last bit from the one
+# read back from the saved CSV; real quote changes are many orders larger.
+VALUE_RTOL = 1e-12
+
+
 def frames_equal(left, right):
-    """Compare saved observations, including amendments with no new rows."""
-    return left.sort_values(QUOTE_KEY).reset_index(drop=True).equals(
-        right.sort_values(QUOTE_KEY).reset_index(drop=True))
+    """Compare saved observations, including amendments with no new rows.
+
+    Keys, units and every other column must match exactly. Numeric values
+    match within VALUE_RTOL so last-bit float noise is not a changed quote.
+    """
+    left = left.sort_values(QUOTE_KEY).reset_index(drop=True)
+    right = right.sort_values(QUOTE_KEY).reset_index(drop=True)
+    numeric = ('value' in left and 'value' in right
+               and pd.api.types.is_numeric_dtype(left['value'])
+               and pd.api.types.is_numeric_dtype(right['value']))
+    if not numeric:
+        return left.equals(right)
+    if not left.drop(columns='value').equals(right.drop(columns='value')):
+        return False
+    return bool(np.isclose(left['value'].to_numpy(dtype=float), right['value'].to_numpy(dtype=float),
+                           rtol=VALUE_RTOL, atol=0.0, equal_nan=True).all())
 
 
 def changed_by_route(before, after):
